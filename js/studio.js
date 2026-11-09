@@ -34,6 +34,7 @@ const MOTIONS = [
 ];
 
 const CAMERAS = [
+  { id: 'reference', label: 'Reference — low & level' },
   { id: 'turntable', label: 'Turntable 360°' },
   { id: 'sway', label: 'Front sway' },
   { id: 'push', label: 'Slow push-in' },
@@ -46,7 +47,7 @@ const CAMERAS = [
 const BACKGROUNDS = ['#d8d4cd', '#efebe4', '#1b1b1d', '#0a0a0a', '#c7cdd4', '#e7d9cf', '#00b140'];
 
 const state = {
-  format: '9x16', motion: 'p_ref', camera: 'turntable', speed: 1, camSpeed: 1,
+  format: '9x16', motion: 'p_ref', camera: 'reference', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
   partColors: {},
@@ -312,9 +313,20 @@ function updateCamera(dt) {
   const { neck, hips, footY, span } = measure;
   const center = tmp.set(hips.x, footY + span * 0.62, hips.z);
   const full = fullBodyDistance(span * 1.42);
+  if (state.camera !== 'reference' && camera.fov !== 28) { camera.fov = 28; camera.updateProjectionMatrix(); }
   let ang = 0, dist = full, y = center.y, look = center.clone();
   const ease = (x) => 0.5 - 0.5 * Math.cos(Math.PI * x);
   switch (state.camera) {
+    case 'reference': {
+      // matches the reference clip: camera at mid-thigh, level (no tilt), long lens, garment fills ~70% of the frame
+      const top = neck.y + span * 0.06, bottom = measure.groundY;
+      const visH = (top - bottom) * 1.27, fov = 22;
+      camera.fov = fov; camera.updateProjectionMatrix();
+      const h = (top + bottom) / 2 - visH * 0.016, d = visH / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+      camera.position.set(center.x, h, hips.z + d);
+      camera.lookAt(center.x, h, hips.z);
+      return;
+    }
     case 'turntable': ang = camT * 0.45; break;
     case 'sway': ang = Math.sin(camT * 0.35) * 0.75; y += Math.sin(camT * 0.21) * span * 0.04; break;
     case 'push': { const p = ease(Math.min(1, (camT % 16) / 8) - Math.max(0, (camT % 16) - 8) / 8); dist = THREE.MathUtils.lerp(full * 1.05, full * 0.55, p); ang = 0.25 - p * 0.2; look.y = THREE.MathUtils.lerp(center.y, neck.y - span * 0.18, p); y = look.y; break; }
@@ -477,4 +489,4 @@ function bindUI() {
 })();
 
 // test hooks
-window.__studio = { fitWith: (o) => fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: { ...state.fit, ...o } }), setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };
+window.__studio = { get camera() { return camera; }, get garment() { return garment; }, fitWith: (o) => fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: { ...state.fit, ...o } }), setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };

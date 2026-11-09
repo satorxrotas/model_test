@@ -23,7 +23,7 @@ export const POSES = [
     id: 'p_ref', label: 'Reference sway (your clip)', duration: RM.duration,
     at: (s, c, p) => {
       const lean = ref('lean', p);
-      return { hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
+      return { stance: 1.25, kneeIn: { L: 0.3, R: 0.3 }, hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
     },
   },
   {
@@ -151,6 +151,8 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
         const S = side[k];
         const off = (P.feet && P.feet[k]) || [0, 0, 0];
         const target = base0.foot[k].clone().add(new THREE.Vector3(...off).multiplyScalar(span));
+        // stance: ankle spacing as a multiple of hip-joint spacing (measured 1.25 in the reference clip)
+        if (P.stance) target.x = base0.hips.x + sign[k] * P.stance * base0.hipW / 2 + off[0] * span;
         const knee = wpos(bones[`${S}Leg`]);
         const kin = (P.kneeIn && P.kneeIn[k]) || 0;
         const pole = knee.add(new THREE.Vector3(-sign[k] * kin * 0.25 * span, 0, 0.5 * span));
