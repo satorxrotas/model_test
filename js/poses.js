@@ -18,11 +18,12 @@ function ref(ch, p) {
 
 export const POSES = [
   {
-    // measured from the reference clip: sway right → sweep left, pelvis tilt, slow knee dip, torso leading the hips
+    // measured from the reference clip and extended into a 14.4 s loop: the exact sweep + its mirror, twice,
+    // with pelvis tilt, hip dip, torso leading the hips, breathing and a slow head turn
     id: 'p_ref', label: 'Reference sway (your clip)', duration: RM.duration,
     at: (s, c, p) => {
       const lean = ref('lean', p);
-      return { hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, 0], head: [-0.4 * lean, 0, 0], swing: [0, 0] };
+      return { hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
     },
   },
   {
