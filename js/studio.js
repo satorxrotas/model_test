@@ -207,7 +207,9 @@ function setMotion(id, fade = 0.45) {
 }
 
 function setBodyMode(mode) {
+  const changed = state.body !== mode;
   state.body = mode;
+  if (changed && garment) rebuildGarment();
   bodyMesh.visible = mode !== 'invisible';
   bodyMesh.material = bodyMats.mannequin;
   bodyMesh.castShadow = mode === 'mannequin';
@@ -230,7 +232,9 @@ function rebuildGarment() {
   mixer.stopAllAction(); current = null;
   if (garment) { scene.remove(garment); garment.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); }); }
   const t0 = performance.now();
-  const res = fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: state.fit });
+  // push-out only matters when the body is visible; otherwise keep the garment's exact shape
+  const opts = { ...state.fit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
+  const res = fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts });
   bindPose = res.bindPose;
   garment = new THREE.Group(); garment.name = 'garment';
   res.geometries.forEach((g, i) => {
@@ -437,4 +441,4 @@ function bindUI() {
 })();
 
 // test hooks
-window.__studio = { setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };
+window.__studio = { fitWith: (o) => fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: { ...state.fit, ...o } }), setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };
