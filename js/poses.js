@@ -16,6 +16,10 @@ function ref(ch, p) {
   return a[i % a.length] * (1 - f) + a[(i + 1) % a.length] * f;
 }
 
+// reference-pose stance tuning (metres / video px / radians)
+let SPREAD = 0.02, POP = 18, ROLL0 = 0.045;
+export function tuneRef(o) { if (o.spread != null) SPREAD = o.spread; if (o.pop != null) POP = o.pop; if (o.roll != null) ROLL0 = o.roll; }
+
 export const POSES = [
   {
     // measured from the reference clip (camera push-in removed) and extended into a seamless loop.
@@ -24,7 +28,7 @@ export const POSES = [
     id: 'p_ref', label: 'Reference sway (your clip)', duration: RM.duration,
     at: (s, c, p) => {
       const lean = ref('lean', p);
-      return { lock: 'L', feetHipW: { L: [0.5, 0], R: [-0.72, 0.02] }, popPx: 10, heel: { R: 0.1 }, kneeIn: { R: 0.2 }, hipPx: [ref('hipX', p), ref('hipY', p)], roll: 0.03 + ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
+      return { lock: 'L', hipSpread: SPREAD, feetHipW: { L: [0.5, 0], R: [-0.62, 0.02] }, popPx: POP, heel: { R: 0.1 }, kneeIn: { R: 0.2 }, hipPx: [ref('hipX', p), ref('hipY', p)], roll: ROLL0 + ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
     },
   },
   {
@@ -100,11 +104,13 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
   const baseVals = new Map();
   for (const t of base.tracks) baseVals.set(t.name, t.values.slice(0, t.getValueSize()));
   const all = []; character.traverse((o) => o.isBone && all.push(o));
+  const legRest = [bones.LeftUpLeg, bones.RightUpLeg].map((b) => [b, b.position.clone()]);
   const applyBase = () => {
     for (const b of all) {
       const q = baseVals.get(`${b.name}.quaternion`); if (q) b.quaternion.fromArray(q);
     }
     const hp = baseVals.get(`${bones.Hips.name}.position`); if (hp) bones.Hips.position.fromArray(hp);
+    for (const [b, p] of legRest) b.position.copy(p);
     character.updateMatrixWorld(true);
   };
   applyBase();
@@ -124,6 +130,7 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
     const times = new Float32Array(frames);
     const qv = all.map(() => new Float32Array(frames * 4));
     const pv = new Float32Array(frames * 3);
+    const lp = legRest.map(() => new Float32Array(frames * 3));
     for (let f = 0; f < frames; f++) {
       const t = f / fps, ph = (t / pose.duration) * Math.PI * 2;
       times[f] = t;
@@ -143,6 +150,20 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
       const qh = new THREE.Quaternion().setFromAxisAngle(Y, P.yaw || 0).multiply(new THREE.Quaternion().setFromAxisAngle(Z, P.roll || 0));
       setWorldQuat(bones.Hips, qh.multiply(base0.hipsQ.clone()));
 
+      // wider-set hip joints (the reference body's are narrow; a real model's legs hang apart from the hip)
+      const spread = P.hipSpread || 0;
+      if (spread) {
+        bones.Hips.updateMatrixWorld(true);
+        const hq = bones.Hips.getWorldQuaternion(new THREE.Quaternion());
+        for (const k of ['L', 'R']) {
+          const b = bones[`${side[k]}UpLeg`];
+          const w = wpos(b).add(new THREE.Vector3(sign[k] * spread, 0, 0).applyQuaternion(hq));
+          b.position.copy(bones.Hips.worldToLocal(w));
+        }
+        bones.Hips.updateMatrixWorld(true);
+      }
+      const hipWeff = base0.hipW + 2 * spread;
+
       // foot targets (planted): either offsets from the neutral stance, or placed relative to hip-joint spacing
       const footTarget = {};
       for (const k of ['L', 'R']) {
@@ -150,7 +171,7 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
         const t = base0.foot[k].clone().add(new THREE.Vector3(...off).multiplyScalar(span));
         if (P.feetHipW && P.feetHipW[k]) {
           const [fx, fz] = P.feetHipW[k];
-          t.x = base0.hips.x + (P.popPx || 0) * pxK + fx * base0.hipW;
+          t.x = base0.hips.x + (P.popPx || 0) * pxK + fx * hipWeff;
           t.z = base0.foot[k].z + fz * span;
         }
         if (P.heel && P.heel[k]) t.y += base0.footLen * Math.sin(P.heel[k] * 1.2);   // heel up, ball of foot stays down
@@ -222,9 +243,11 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
 
       all.forEach((b, i) => b.quaternion.toArray(qv[i], f * 4));
       bones.Hips.position.toArray(pv, f * 3);
+      legRest.forEach(([b], i) => b.position.toArray(lp[i], f * 3));
     }
     const tracks = all.map((b, i) => new THREE.QuaternionKeyframeTrack(`${b.name}.quaternion`, times, qv[i]));
     tracks.push(new THREE.VectorKeyframeTrack(`${bones.Hips.name}.position`, times, pv));
+    legRest.forEach(([b], i) => tracks.push(new THREE.VectorKeyframeTrack(`${b.name}.position`, times, lp[i])));
     clips.push(Object.assign(new THREE.AnimationClip(pose.id, pose.duration, tracks), { label: pose.label }));
   }
   return clips;
