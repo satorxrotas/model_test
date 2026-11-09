@@ -17,7 +17,7 @@ function ref(ch, p) {
 }
 
 // reference-pose stance tuning (metres / video px / radians)
-let SPREAD = 0.02, POP = 18, ROLL0 = 0.045;
+let SPREAD = 0.03, POP = 18, ROLL0 = 0.045;
 export function tuneRef(o) { if (o.spread != null) SPREAD = o.spread; if (o.pop != null) POP = o.pop; if (o.roll != null) ROLL0 = o.roll; }
 
 export const POSES = [
