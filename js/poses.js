@@ -18,12 +18,13 @@ function ref(ch, p) {
 
 export const POSES = [
   {
-    // measured from the reference clip and extended into a 14.4 s loop: the exact sweep + its mirror, twice,
-    // with pelvis tilt, hip dip, torso leading the hips, breathing and a slow head turn
+    // measured from the reference clip (camera push-in removed) and extended into a seamless loop.
+    // Contrapposto as in the clip: weight on the LEFT leg, locked straight under its hip; hip cocked up and out
+    // on that side; RIGHT leg relaxed — knee bent forward and turned in, heel slightly up. Feet ~1.08x hip width.
     id: 'p_ref', label: 'Reference sway (your clip)', duration: RM.duration,
     at: (s, c, p) => {
       const lean = ref('lean', p);
-      return { stance: 1.25, kneeIn: { L: 0.3, R: 0.3 }, hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
+      return { lock: 'L', feetHipW: { L: [0.5, 0], R: [-0.72, 0.02] }, popPx: 10, heel: { R: 0.1 }, kneeIn: { R: 0.2 }, hipPx: [ref('hipX', p), ref('hipY', p)], roll: 0.03 + ref('roll', p), spine: [lean, 0, ref('breath', p)], head: [-0.4 * lean, ref('headYaw', p), -0.5 * ref('breath', p)], swing: [0, 0] };
     },
   },
   {
@@ -112,6 +113,8 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
     foot: { L: wpos(bones.LeftFoot), R: wpos(bones.RightFoot) },
     footQ: { L: bones.LeftFoot.getWorldQuaternion(new THREE.Quaternion()), R: bones.RightFoot.getWorldQuaternion(new THREE.Quaternion()) },
     hipW: Math.abs(wpos(bones.LeftUpLeg).x - wpos(bones.RightUpLeg).x),
+    legLen: Object.fromEntries(['Left', 'Right'].map((S) => [S[0], wpos(bones[`${S}UpLeg`]).distanceTo(wpos(bones[`${S}Leg`])) + wpos(bones[`${S}Leg`]).distanceTo(wpos(bones[`${S}Foot`]))])),
+    footLen: wpos(bones.LeftFoot).distanceTo(wpos(bones.LeftToeBase)),
   };
   const side = { L: 'Left', R: 'Right' }, sign = { L: 1, R: -1 };
 
@@ -133,10 +136,39 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
         const k = (base0.hips.y - (base0.foot.L.y + base0.foot.R.y) / 2) / RM.pxHipsToFeet / span;
         P.hip = [P.hipPx[0] * k, -P.hipPx[1] * k, 0];
       }
+      const pxK = (base0.hips.y - (base0.foot.L.y + base0.foot.R.y) / 2) / RM.pxHipsToFeet; // metres per video px
       const hp = base0.hips.clone().add(new THREE.Vector3(...(P.hip || [0, 0, 0])).multiplyScalar(span));
+      if (P.popPx) hp.x += P.popPx * pxK;
       bones.Hips.position.copy(bones.Hips.parent.worldToLocal(hp));
       const qh = new THREE.Quaternion().setFromAxisAngle(Y, P.yaw || 0).multiply(new THREE.Quaternion().setFromAxisAngle(Z, P.roll || 0));
       setWorldQuat(bones.Hips, qh.multiply(base0.hipsQ.clone()));
+
+      // foot targets (planted): either offsets from the neutral stance, or placed relative to hip-joint spacing
+      const footTarget = {};
+      for (const k of ['L', 'R']) {
+        const off = (P.feet && P.feet[k]) || [0, 0, 0];
+        const t = base0.foot[k].clone().add(new THREE.Vector3(...off).multiplyScalar(span));
+        if (P.feetHipW && P.feetHipW[k]) {
+          const [fx, fz] = P.feetHipW[k];
+          t.x = base0.hips.x + (P.popPx || 0) * pxK + fx * base0.hipW;
+          t.z = base0.foot[k].z + fz * span;
+        }
+        if (P.heel && P.heel[k]) t.y += base0.footLen * Math.sin(P.heel[k] * 1.2);   // heel up, ball of foot stays down
+        footTarget[k] = t;
+      }
+      // weight-bearing leg locked straight: solve pelvis height so that leg is at full length
+      if (P.lock) {
+        const S = side[P.lock];
+        bones.Hips.updateMatrixWorld(true);
+        const J = wpos(bones[`${S}UpLeg`]), T = footTarget[P.lock], L = base0.legLen[P.lock] * 0.9993;
+        const h2 = L * L - (J.x - T.x) ** 2 - (J.z - T.z) ** 2;
+        if (h2 > 0) {
+          const dy = T.y + Math.sqrt(h2) - J.y;
+          const hw = wpos(bones.Hips); hw.y += dy;
+          bones.Hips.position.copy(bones.Hips.parent.worldToLocal(hw));
+          bones.Hips.updateMatrixWorld(true);
+        }
+      }
 
       // spine + head: [roll(Z), yaw(Y), pitch(X)] spread over the chain
       const [sr, sy, sp] = P.spine || [0, 0, 0];
@@ -149,10 +181,7 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
       // legs: feet locked to the floor, knees bend naturally (optionally inward)
       for (const k of ['L', 'R']) {
         const S = side[k];
-        const off = (P.feet && P.feet[k]) || [0, 0, 0];
-        const target = base0.foot[k].clone().add(new THREE.Vector3(...off).multiplyScalar(span));
-        // stance: ankle spacing as a multiple of hip-joint spacing (measured 1.25 in the reference clip)
-        if (P.stance) target.x = base0.hips.x + sign[k] * P.stance * base0.hipW / 2 + off[0] * span;
+        const target = footTarget[k];
         const knee = wpos(bones[`${S}Leg`]);
         const kin = (P.kneeIn && P.kneeIn[k]) || 0;
         const pole = knee.add(new THREE.Vector3(-sign[k] * kin * 0.25 * span, 0, 0.5 * span));
@@ -160,6 +189,7 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
         // keep the sole flat; a bent-in knee lifts the heel a touch
         const fq = base0.footQ[k].clone();
         if (kin) fq.premultiply(_q.setFromAxisAngle(X, 0.18 * kin));
+        if (P.heel && P.heel[k]) fq.premultiply(_q.setFromAxisAngle(X, P.heel[k] * 1.2));
         setWorldQuat(bones[`${S}Foot`], fq);
       }
 

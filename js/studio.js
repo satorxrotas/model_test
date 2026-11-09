@@ -7,6 +7,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose } from './autoskin.js';
 import { exportRiggedGLB } from './exportrig.js';
 import { POSES, bakePoses } from './poses.js';
+import { REF_MOTION } from './refmotion.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -35,6 +36,7 @@ const MOTIONS = [
 
 const CAMERAS = [
   { id: 'reference', label: 'Reference — low & level' },
+  { id: 'refpush', label: 'Reference + push-in (as in clip)' },
   { id: 'turntable', label: 'Turntable 360°' },
   { id: 'sway', label: 'Front sway' },
   { id: 'push', label: 'Slow push-in' },
@@ -313,10 +315,12 @@ function updateCamera(dt) {
   const { neck, hips, footY, span } = measure;
   const center = tmp.set(hips.x, footY + span * 0.62, hips.z);
   const full = fullBodyDistance(span * 1.42);
-  if (state.camera !== 'reference' && camera.fov !== 28) { camera.fov = 28; camera.updateProjectionMatrix(); }
+  if (camera.view && camera.view.enabled && state.camera !== 'refpush') camera.clearViewOffset();
+  if (!state.camera.startsWith('ref') && camera.fov !== 28) { camera.fov = 28; camera.updateProjectionMatrix(); }
   let ang = 0, dist = full, y = center.y, look = center.clone();
   const ease = (x) => 0.5 - 0.5 * Math.cos(Math.PI * x);
   switch (state.camera) {
+    case 'refpush':
     case 'reference': {
       // matches the reference clip: camera at mid-thigh, level (no tilt), long lens, garment fills ~70% of the frame
       const top = neck.y + span * 0.06, bottom = measure.groundY;
@@ -325,6 +329,14 @@ function updateCamera(dt) {
       const h = (top + bottom) / 2 - visH * 0.016, d = visH / (2 * Math.tan(THREE.MathUtils.degToRad(fov / 2)));
       camera.position.set(center.x, h, hips.z + d);
       camera.lookAt(center.x, h, hips.z);
+      if (state.camera === 'refpush') {
+        // digital push-in measured from the clip (~6.7% over 3.9 s, easing out), centred at chest height; holds after
+        const n = REF_MOTION.zoomCurve.length, x = Math.min(camT / REF_MOTION.zoomCurveSeconds, 1) * (n - 1);
+        const i = Math.floor(x), f = x - i, c = REF_MOTION.zoomCurve[i] * (1 - f) + REF_MOTION.zoomCurve[Math.min(i + 1, n - 1)] * f;
+        const z = 1 + REF_MOTION.zoomPerSecond * REF_MOTION.zoomCurveSeconds * c;
+        const F = FORMATS[state.format], W = F.w, H = F.h, px = W * 0.5, py = H * 0.264;
+        camera.setViewOffset(W, H, px - px / z, py - py / z, W / z, H / z);
+      } else if (camera.view && camera.view.enabled) camera.clearViewOffset();
       return;
     }
     case 'turntable': ang = camT * 0.45; break;
