@@ -2,6 +2,7 @@
 // weight shifts, hip pops, sways — with both feet locked to the floor by IK.
 import * as THREE from 'three';
 import { aimBone } from './autoskin.js';
+import { REF_MOTION as RM } from './refmotion.js';
 
 const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3(0, 0, 1);
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3();
@@ -9,7 +10,21 @@ const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.
 // Each pose returns per-frame parameters from phase p (0..1, loops seamlessly).
 // Units: distances are fractions of body span (neck→ankle), angles in radians.
 // Sides: L = character's left (+X).
+// linear sample of a REF_MOTION channel at loop phase p (0..1)
+function ref(ch, p) {
+  const a = RM[ch], x = (((p % 1) + 1) % 1) * a.length, i = Math.floor(x), f = x - i;
+  return a[i % a.length] * (1 - f) + a[(i + 1) % a.length] * f;
+}
+
 export const POSES = [
+  {
+    // measured from the reference clip: sway right → sweep left, pelvis tilt, slow knee dip, torso leading the hips
+    id: 'p_ref', label: 'Reference sway (your clip)', duration: RM.duration,
+    at: (s, c, p) => {
+      const lean = ref('lean', p);
+      return { hipPx: [ref('hipX', p), ref('hipY', p)], roll: ref('roll', p), spine: [lean, 0, 0], head: [-0.4 * lean, 0, 0], swing: [0, 0] };
+    },
+  },
   {
     id: 'p_shift', label: 'Weight shift', duration: 5.5,
     at: (s, c) => ({ hip: [0.032 * s, -0.012, 0], roll: 0.06 * s, spine: [-0.035 * s, 0, 0], head: [0.02 * s, 0, 0], swing: [0.04 * c, -0.04 * c] }),
@@ -108,10 +123,15 @@ export function bakePoses({ character, bones, base, span, fps = 30 }) {
     for (let f = 0; f < frames; f++) {
       const t = f / fps, ph = (t / pose.duration) * Math.PI * 2;
       times[f] = t;
-      const P = pose.at(Math.sin(ph), Math.cos(ph));
+      const P = pose.at(Math.sin(ph), Math.cos(ph), t / pose.duration);
       applyBase();
 
       // pelvis
+      if (P.hipPx) {
+        // video pixels -> body units: hips-to-feet height in the clip = RM.pxHipsToFeet px
+        const k = (base0.hips.y - (base0.foot.L.y + base0.foot.R.y) / 2) / RM.pxHipsToFeet / span;
+        P.hip = [P.hipPx[0] * k, -P.hipPx[1] * k, 0];
+      }
       const hp = base0.hips.clone().add(new THREE.Vector3(...(P.hip || [0, 0, 0])).multiplyScalar(span));
       bones.Hips.position.copy(bones.Hips.parent.worldToLocal(hp));
       const qh = new THREE.Quaternion().setFromAxisAngle(Y, P.yaw || 0).multiply(new THREE.Quaternion().setFromAxisAngle(Z, P.roll || 0));

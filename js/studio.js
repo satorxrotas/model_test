@@ -46,7 +46,7 @@ const CAMERAS = [
 const BACKGROUNDS = ['#d8d4cd', '#efebe4', '#1b1b1d', '#0a0a0a', '#c7cdd4', '#e7d9cf', '#00b140'];
 
 const state = {
-  format: '9x16', motion: 'p_shift', camera: 'turntable', speed: 1, camSpeed: 1,
+  format: '9x16', motion: 'p_ref', camera: 'turntable', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
   partColors: {},
