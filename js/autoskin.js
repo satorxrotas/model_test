@@ -117,7 +117,7 @@ export function sampleBody(bodyMesh) {
 }
 
 // Rotate `bone` so that `endBone` points at `target` (world space).
-function aimBone(bone, endBone, target) {
+export function aimBone(bone, endBone, target) {
   bone.parent.updateMatrixWorld(true);
   bone.updateMatrixWorld(true);
   const p = bone.getWorldPosition(_v1), e = endBone.getWorldPosition(_v2);

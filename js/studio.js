@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose } from './autoskin.js';
 import { exportRiggedGLB } from './exportrig.js';
+import { POSES, bakePoses } from './poses.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -20,15 +21,16 @@ const FORMATS = {
 };
 
 const MOTIONS = [
-  { id: 'idle', label: 'Idle', src: 'Xbot', clip: 'idle' },
-  { id: 'walk', label: 'Walk', src: 'Xbot', clip: 'walk' },
-  { id: 'run', label: 'Run', src: 'Xbot', clip: 'run' },
-  { id: 'samba', label: 'Dance', src: 'Michelle', clip: 'SambaDance' },
-  { id: 'agree', label: 'Nod', src: 'Xbot', clip: 'agree' },
-  { id: 'shake', label: 'Head shake', src: 'Xbot', clip: 'headShake' },
-  { id: 'sad', label: 'Pose — slouch', src: 'Xbot', clip: 'sad_pose' },
-  { id: 'sneak', label: 'Pose — crouch', src: 'Xbot', clip: 'sneak_pose' },
-  { id: 'apose', label: 'Static (fit pose)' },
+  ...POSES.map((p) => ({ id: p.id, label: p.label, group: 'Model poses · in place' })),
+  { id: 'idle', label: 'Idle', src: 'Xbot', clip: 'idle', group: 'Movement' },
+  { id: 'walk', label: 'Walk', src: 'Xbot', clip: 'walk', group: 'Movement' },
+  { id: 'run', label: 'Run', src: 'Xbot', clip: 'run', group: 'Movement' },
+  { id: 'samba', label: 'Dance', src: 'Michelle', clip: 'SambaDance', group: 'Movement' },
+  { id: 'agree', label: 'Nod', src: 'Xbot', clip: 'agree', group: 'Movement' },
+  { id: 'shake', label: 'Head shake', src: 'Xbot', clip: 'headShake', group: 'Movement' },
+  { id: 'sad', label: 'Held — slouch', src: 'Xbot', clip: 'sad_pose', group: 'Held' },
+  { id: 'sneak', label: 'Held — crouch', src: 'Xbot', clip: 'sneak_pose', group: 'Held' },
+  { id: 'apose', label: 'Static (fit pose)', group: 'Held' },
 ];
 
 const CAMERAS = [
@@ -44,7 +46,7 @@ const CAMERAS = [
 const BACKGROUNDS = ['#d8d4cd', '#efebe4', '#1b1b1d', '#0a0a0a', '#c7cdd4', '#e7d9cf', '#00b140'];
 
 const state = {
-  format: '9x16', motion: 'idle', camera: 'turntable', speed: 1, camSpeed: 1,
+  format: '9x16', motion: 'p_shift', camera: 'turntable', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
   partColors: {},
@@ -149,6 +151,10 @@ async function loadRigs() {
     baked.name = m.id;
     actions[m.id] = mixer.clipAction(baked);
   }
+  // in-place model poses, built on the idle stance with feet locked by IK
+  for (const c of bakePoses({ character, bones, base: actions.idle.getClip(), span: measure.span })) actions[c.name] = mixer.clipAction(c);
+  applyPose(restPose);
+  character.updateMatrixWorld(true);
 }
 
 // World-space delta retargeting between two humanoid rigs that share bone names.
@@ -389,7 +395,11 @@ function frame() {
 /* ---------------- UI ---------------- */
 
 function fillSelect(sel, items, value) {
-  sel.innerHTML = items.map((i) => `<option value="${i.id}">${i.label}</option>`).join('');
+  const groups = [...new Set(items.map((i) => i.group || ''))];
+  sel.innerHTML = groups.map((g) => {
+    const opts = items.filter((i) => (i.group || '') === g).map((i) => `<option value="${i.id}">${i.label}</option>`).join('');
+    return g ? `<optgroup label="${g}">${opts}</optgroup>` : opts;
+  }).join('');
   sel.value = value;
 }
 function buildPartColorUI() {
