@@ -100,7 +100,7 @@ export function snapshotPose(bones) {
 export function applyPose(snap) { for (const [b, p, q, s] of snap) { b.position.copy(p); b.quaternion.copy(q); b.scale.copy(s); } }
 
 // Posed body vertices + normals in world space.
-function sampleBody(bodyMesh) {
+export function sampleBody(bodyMesh) {
   bodyMesh.updateMatrixWorld(true);
   bodyMesh.skeleton.update();
   const geo = bodyMesh.geometry, n = geo.attributes.position.count;

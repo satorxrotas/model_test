@@ -5,6 +5,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose } from './autoskin.js';
+import { exportRiggedGLB } from './exportrig.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -115,7 +116,7 @@ function fabricMaterial(part, i) {
 
 const gltfLoader = new GLTFLoader();
 let character, bodyMesh, bones, restPose, bindPose, mixer, actions = {}, current = null, measure;
-let garment = null, garmentParts = null, garmentName = '';
+let garment = null, garmentParts = null, garmentName = '', garmentSkeleton = null;
 
 const bodyMats = {
   mannequin: new THREE.MeshStandardMaterial({ color: '#cfc9c1', roughness: 0.55, metalness: 0 }),
@@ -236,6 +237,7 @@ function rebuildGarment() {
   const opts = { ...state.fit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
   const res = fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts });
   bindPose = res.bindPose;
+  garmentSkeleton = res.skeleton;
   garment = new THREE.Group(); garment.name = 'garment';
   res.geometries.forEach((g, i) => {
     const m = new THREE.SkinnedMesh(g, fabricMaterial(garmentParts[i], i));
@@ -265,6 +267,29 @@ async function loadGarmentFile(file) {
     await loadGarmentFromObject(obj, file.name);
   } catch (e) { console.error(e); status(`Couldn't load ${file.name}: ${e.message}`); }
 }
+
+/* ---------------- rigged export ---------------- */
+
+async function exportRig() {
+  if (!garment) return;
+  const btn = $('#exportrig'); btn.disabled = true;
+  status('Building rigged .glb…');
+  const which = $('#exportanims').value;
+  const motions = MOTIONS.filter((m) => actions[m.id] && (which === 'all' || (which === 'current' && m.id === state.motion)));
+  const clips = motions.map((m) => { const c = actions[m.id].getClip().clone(); c.name = m.label.replace(/\s*—\s*/g, ' ').replace(/[^\w ]+/g, '').trim(); return c; });
+  const base = (garmentName || 'garment').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '-');
+  const was = state.motion;
+  try {
+    mixer.stopAllAction(); current = null;
+    const blob = await exportRiggedGLB({ character, bodyMesh, garment, skeleton: garmentSkeleton, bindPose, applyPose, includeBody: $('#exportbody').checked, clips, name: base });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `${base}_rigged.glb`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    status(`Saved ${base}_rigged.glb · ${(blob.size / 1e6).toFixed(1)} MB · ${clips.length} motion${clips.length === 1 ? '' : 's'} — Blender: File › Import › glTF 2.0`);
+  } catch (e) { console.error(e); status(`Export failed: ${e.message}`); }
+  finally { setMotion(was, 0); btn.disabled = false; }
+}
+window.__exportRig = exportRig;
 
 /* ---------------- camera moves ---------------- */
 
@@ -420,6 +445,7 @@ function bindUI() {
   window.addEventListener('drop', (e) => { e.preventDefault(); document.body.classList.remove('drag'); const f = e.dataTransfer.files[0]; if (f) loadGarmentFile(f); });
 
   $('#rec').onclick = () => (recorder ? stopRecording() : startRecording());
+  $('#exportrig').onclick = exportRig;
   $('#togglepanel').onclick = () => document.body.classList.toggle('panel-hidden');
   window.addEventListener('keydown', (e) => { if (e.key === 'r' && !e.target.closest('input,select')) $('#rec').click(); });
 }
