@@ -4,7 +4,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose, SHAPES, SHAPE_PRESETS } from './autoskin.js';
+import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose } from './autoskin.js';
 import { exportRiggedGLB } from './exportrig.js';
 import { POSES, bakePoses } from './poses.js';
 import { REF_MOTION } from './refmotion.js';
@@ -53,7 +53,6 @@ const state = {
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
   partColors: {},
-  shape: { ...SHAPE_PRESETS.inspo },
 };
 
 /* ---------------- renderer / scene ---------------- */
@@ -257,7 +256,6 @@ function rebuildGarment() {
     m.updateMatrixWorld(true);
     m.bind(res.skeleton, new THREE.Matrix4());
   });
-  applyShape();
   scene.add(garment);
   setMotion(was, 0);
   const ms = Math.round(performance.now() - t0);
@@ -301,33 +299,6 @@ async function exportRig() {
   finally { setMotion(was, 0); btn.disabled = false; }
 }
 window.__exportRig = exportRig;
-
-
-/* ---------------- body shape ---------------- */
-
-function applyShape() {
-  if (!garment) return;
-  garment.children.forEach((m) => {
-    if (!m.morphTargetInfluences) return;
-    SHAPES.forEach((sh, i) => { m.morphTargetInfluences[i] = state.shape[sh.id] || 0; });
-  });
-}
-function buildShapeUI() {
-  const box = $('#shape'); box.innerHTML = '';
-  for (const sh of SHAPES) {
-    const row = document.createElement('label'); row.className = 'row'; row.title = sh.hint;
-    row.innerHTML = `<span>${sh.label}</span><input type="range" min="-0.6" max="1.5" step="0.05" data-shape="${sh.id}"><span class="val"></span>`;
-    const el = row.querySelector('input'), out = row.querySelector('.val');
-    const show = () => { const v = +el.value; out.textContent = `${v > 0 ? '+' : ''}${Math.round(v * 100)}`; };
-    el.value = state.shape[sh.id] || 0; show();
-    el.oninput = () => { state.shape[sh.id] = +el.value; show(); applyShape(); };
-    box.appendChild(row);
-  }
-}
-function setShapePreset(name) {
-  state.shape = { ...SHAPE_PRESETS[name] };
-  document.querySelectorAll('#shape input').forEach((el) => { el.value = state.shape[el.dataset.shape] || 0; el.oninput(); });
-}
 
 /* ---------------- camera moves ---------------- */
 
@@ -509,9 +480,6 @@ function bindUI() {
 
   $('#rec').onclick = () => (recorder ? stopRecording() : startRecording());
   $('#exportrig').onclick = exportRig;
-  buildShapeUI();
-  $('#shape-inspo').onclick = () => setShapePreset('inspo');
-  $('#shape-reset').onclick = () => setShapePreset('neutral');
   $('#togglepanel').onclick = () => document.body.classList.toggle('panel-hidden');
   window.addEventListener('keydown', (e) => { if (e.key === 'r' && !e.target.closest('input,select')) $('#rec').click(); });
 }

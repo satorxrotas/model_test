@@ -320,11 +320,6 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     if (!top.length) { sIdx[v * 4] = 0; sW[v * 4] = 1; }
   }
 
-  // body-shape morph targets (unit amount each), localised with the transferred skin weights
-  const fw = new Float32Array(nW * 3);
-  for (let v = 0; v < nW; v++) for (let c = 0; c < 3; c++) fw[v * 3 + c] = wpos[v * 3 + c] + off[v * 3 + c];
-  const shapeDeltas = buildShapes({ pos: fw, nW, sIdx, sW, boneNames: bodyMesh.skeleton.bones.map((b) => b.name.replace(/^mixamorig[:_]?/, '')), bones, span, smooth });
-
   // build skinned meshes
   const skeleton = new THREE.Skeleton(bodyMesh.skeleton.bones); // inverses captured in the fitted A-pose
   const geometries = fitted.map((g, gi) => {
@@ -337,75 +332,9 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     }
     g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
     g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
-    g.morphAttributes.position = SHAPES.map((sh) => {
-      const d = shapeDeltas[sh.id], arr = new Float32Array(n * 3);
-      for (let i = 0; i < n; i++) { const w = r[i]; arr[i * 3] = d[w * 3]; arr[i * 3 + 1] = d[w * 3 + 1]; arr[i * 3 + 2] = d[w * 3 + 2]; }
-      const at = new THREE.Float32BufferAttribute(arr, 3); at.name = sh.label; return at;
-    });
-    g.morphTargetsRelative = true;
-    g.userData.targetNames = SHAPES.map((sh) => sh.label);
     g.computeBoundingSphere();
     return g;
   });
 
   return { geometries, skeleton, bindPose, info: { hasLegs, scale: s, sleeves: !!(cL && cR), vertices: nW } };
-}
-
-/* ---------- body-shape morphs ---------- */
-
-// Each shape is a unit morph; the UI drives its influence (negative = slimmer).
-export const SHAPES = [
-  { id: 'hips', label: 'Hips', hint: 'width through the hips' },
-  { id: 'thighs', label: 'Thighs', hint: 'thigh fullness' },
-  { id: 'calves', label: 'Lower legs', hint: 'knee + calf fullness' },
-  { id: 'glutes', label: 'Glutes', hint: 'fullness at the back' },
-  { id: 'waist', label: 'Waist', hint: 'waist width (negative cinches)' },
-];
-// Measured from the inspo vs this rig: hips ~9% wider, thighs ~20% and lower legs ~30% fuller.
-export const SHAPE_PRESETS = {
-  inspo: { hips: 0.6, thighs: 0.85, calves: 1.0, glutes: 0.4, waist: -0.15 },
-  neutral: { hips: 0, thighs: 0, calves: 0, glutes: 0, waist: 0 },
-};
-
-function buildShapes({ pos, nW, sIdx, sW, boneNames, bones, span, smooth }) {
-  const W = (n) => bones[n].getWorldPosition(new THREE.Vector3());
-  const hips = W('Hips'), waistY = (W('Spine').y + W('Spine1').y) / 2;
-  const seg = { L: [W('LeftUpLeg'), W('LeftLeg'), W('LeftFoot')], R: [W('RightUpLeg'), W('RightLeg'), W('RightFoot')] };
-  const hipY = (seg.L[0].y + seg.R[0].y) / 2;
-  const gauss = (x, m, s) => Math.exp(-0.5 * ((x - m) / s) ** 2);
-  const out = Object.fromEntries(SHAPES.map((sh) => [sh.id, new Float32Array(nW * 3)]));
-  const p = new THREE.Vector3(), r = new THREE.Vector3(), ab = new THREE.Vector3();
-  // radial push away from a bone segment a->b, returns t along it
-  const radial = (a, b, target) => {
-    ab.copy(b).sub(a); const t = THREE.MathUtils.clamp(p.clone().sub(a).dot(ab) / ab.lengthSq(), 0, 1);
-    target.copy(p).sub(a.clone().addScaledVector(ab, t)); return t;
-  };
-  for (let v = 0; v < nW; v++) {
-    p.set(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
-    const wb = {};
-    for (let c = 0; c < 4; c++) { const w = sW[v * 4 + c]; if (w) { const n = boneNames[sIdx[v * 4 + c]]; wb[n] = (wb[n] || 0) + w; } }
-    const set = (id, x, y, z) => { const o = out[id]; o[v * 3] += x; o[v * 3 + 1] += y; o[v * 3 + 2] += z; };
-    for (const k of ['L', 'R']) {
-      const S = k === 'L' ? 'Left' : 'Right', [hj, kn, an] = seg[k];
-      // thighs: +30% radius, fullest at the top, easing toward the knee
-      const wu = (wb[`${S}UpLeg`] || 0);
-      // inner side grows much less than the outer side, so the thigh gap is kept
-      const outward = (vec) => { const sx = k === 'L' ? 1 : -1, len = vec.length() || 1; return 0.12 + 0.88 * THREE.MathUtils.clamp(0.5 + 0.5 * sx * vec.x / len, 0, 1); };
-      if (wu) { const t = radial(hj, kn, r); set('thighs', ...r.multiplyScalar(0.3 * wu * (1 - 0.35 * t) * outward(r)).toArray()); }
-      // lower legs: +30% radius from knee to mid-calf, fading at the cuff
-      const wl = (wb[`${S}Leg`] || 0) + 0.5 * (wb[`${S}Foot`] || 0);
-      if (wl) { const t = radial(kn, an, r); set('calves', ...r.multiplyScalar(0.3 * wl * (t < 0.6 ? 1 : 1 - (t - 0.6) / 0.4 * 0.7) * outward(r)).toArray()); }
-    }
-    const dx = p.x - hips.x, dz = p.z - hips.z;
-    // hips: +15% lateral spread around hip-joint height
-    const bh = gauss(p.y, hipY, span * 0.075);
-    set('hips', dx * 0.15 * bh, 0, 0);
-    // glutes: up to 3.5 cm backward on the rear surface below the hip joints
-    if (dz < 0) { const bg = gauss(p.y, hipY - span * 0.04, span * 0.065) * Math.min(1, -dz / (span * 0.08)) * gauss(Math.abs(dx), span * 0.07, span * 0.09); set('glutes', 0, 0, -0.035 * (span / 1.17) * bg); }
-    // waist: +15% width + depth around the waist
-    const bw = gauss(p.y, waistY, span * 0.05);
-    set('waist', dx * 0.15 * bw, 0, dz * 0.1 * bw);
-  }
-  for (const sh of SHAPES) out[sh.id] = smooth(out[sh.id], 3, 3, 0.5);
-  return out;
 }

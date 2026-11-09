@@ -69,7 +69,6 @@ export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, 
     const mat = new THREE.MeshStandardMaterial({ name: m.name, color: src.color.clone(), map: src.map || null, roughness: src.roughness, metalness: 0, side: THREE.DoubleSide });
     const sm = new THREE.SkinnedMesh(g, mat);
     sm.name = m.name;
-    if (m.morphTargetInfluences) sm.morphTargetInfluences = m.morphTargetInfluences.slice();   // body-shape keys keep their current values
     root.add(sm);
     sm.updateMatrixWorld(true);
     sm.bind(skel, new THREE.Matrix4());
