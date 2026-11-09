@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>Garment Motion Studio</title>
 <meta name="description" content="Drop in a 3D garment, auto-rig it onto a body, animate it and record social-ready video.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -61,12 +62,32 @@
     aside { order: 2; border-right: 0; border-top: 1px solid var(--line); padding: 14px 16px 40px; }
     #viewport { order: 1; }
   }
+  /* password gate */
+  body.locked #app { display: none; }
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, #1a1a1d 0%, #0b0b0c 70%); padding: 16px; }
+  #gate form { width: 100%; max-width: 320px; display: grid; gap: 10px; }
+  #gate h1 { margin: 0; }
+  #gate input[type=password] { font: inherit; color: var(--text); background: #1d1d21; border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; outline: none; }
+  #gate input[type=password]:focus { border-color: var(--accent); }
+  #gate-err { color: #ff6b62; font-size: 12px; min-height: 16px; margin: 0; }
+  #gate .shake { animation: shake .35s; }
+  @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
 </script>
 </head>
-<body>
+<body class="locked">
+<div id="gate">
+  <form id="gate-form" autocomplete="off">
+    <h1>Garment Motion Studio</h1>
+    <p class="sub" style="margin:0 0 6px">Enter the password to continue.</p>
+    <input type="password" id="gate-pw" placeholder="Password" aria-label="Password" required>
+    <label class="row" style="margin:0"><span style="color:var(--mute)">Remember on this device</span><input type="checkbox" id="gate-remember" checked></label>
+    <button class="primary" type="submit" style="padding:11px">Enter</button>
+    <p id="gate-err" role="alert"></p>
+  </form>
+</div>
 <div id="app">
   <aside>
     <h1>Garment Motion Studio</h1>
@@ -143,6 +164,6 @@
     </div>
   </main>
 </div>
-<script type="module" src="js/studio.js"></script>
+<script type="module" src="js/gate.js"></script>
 </body>
 </html>

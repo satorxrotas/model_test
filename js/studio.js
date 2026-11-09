@@ -179,7 +179,7 @@ function retargetClip(src, clip, fps = 30) {
 
   const smix = new THREE.AnimationMixer(srcRoot);
   smix.clipAction(clip).play();
-  const frames = Math.max(2, Math.ceil(clip.duration * fps) + 1);
+  const frames = Math.max(2, Math.floor(clip.duration * fps + 1e-6) + 1);
   const times = new Float32Array(frames);
   const qv = Object.fromEntries(order.map(([n]) => [n, new Float32Array(frames * 4)]));
   const pv = new Float32Array(frames * 3);

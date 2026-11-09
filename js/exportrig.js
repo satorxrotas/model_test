@@ -11,7 +11,7 @@ export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, 
   //    into the top bone so every DCC tool (Blender included) reads the same rest pose.
   applyPose(bindPose);
   character.updateMatrixWorld(true);
-  const root = new THREE.Group();
+  const root = new THREE.Scene(); // meshes + skeleton become root nodes (spec-clean)
   root.name = name;
   const map = new Map(), rootInfo = new Map();
   const src = skeleton.bones;
@@ -32,6 +32,7 @@ export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, 
       root.add(nb);
     }
   }
+  for (const nb of map.values()) nb.quaternion.normalize();
   root.updateMatrixWorld(true);
   const skel = new THREE.Skeleton(src.map((b) => map.get(b)));
 
@@ -57,14 +58,15 @@ export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, 
       }
       tracks.push(tt);
     }
-    return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+    return new THREE.AnimationClip(clip.name, clip.duration, tracks.map(cleanTrack));
   });
 
   // 2. garment pieces, bound with the same inverse-bind matrices as in the studio
   garment.children.forEach((m) => {
     const g = m.geometry.clone();
-    const mat = m.material.clone();
-    mat.name = m.name;
+    // plain PBR material, no glTF extensions — imports cleanly in older Blender (3.x) too
+    const src = m.material;
+    const mat = new THREE.MeshStandardMaterial({ name: m.name, color: src.color.clone(), map: src.map || null, roughness: src.roughness, metalness: 0, side: THREE.DoubleSide });
     const sm = new THREE.SkinnedMesh(g, mat);
     sm.name = m.name;
     root.add(sm);
@@ -100,4 +102,16 @@ function unitScale(obj) {
   const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
   obj.matrixWorld.decompose(p, q, s);
   return (s.x + s.y + s.z) / 3;
+}
+
+// drop keys whose time does not strictly increase; renormalise quaternions
+function cleanTrack(t) {
+  const n = t.getValueSize(), keep = [];
+  for (let i = 0; i < t.times.length; i++) if (!keep.length || t.times[i] > t.times[keep[keep.length - 1]] + 1e-6) keep.push(i);
+  const times = new Float32Array(keep.length), vals = new Float32Array(keep.length * n);
+  keep.forEach((k, j) => { times[j] = t.times[k]; for (let c = 0; c < n; c++) vals[j * n + c] = t.values[k * n + c]; });
+  if (n === 4 && /quaternion$/.test(t.name)) for (let i = 0; i < vals.length; i += 4) {
+    const l = Math.hypot(vals[i], vals[i + 1], vals[i + 2], vals[i + 3]) || 1; for (let c = 0; c < 4; c++) vals[i + c] /= l;
+  }
+  return new t.constructor(t.name, times, vals);
 }
