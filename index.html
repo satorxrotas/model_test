@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Garment Motion Studio</title>
+<meta name="description" content="Drop in a 3D garment, auto-rig it onto a body, animate it and record social-ready video.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0f; --panel: rgba(20,20,23,.92); --line: rgba(255,255,255,.08); --text: #ecebe8; --mute: #8d8b87;
+    --accent: #e8ff5a; --rec: #ff3b30;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Inter Tight', system-ui, sans-serif; overflow: hidden; }
+  #app { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+  body.panel-hidden #app { grid-template-columns: 0 1fr; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 18px 18px 120px; }
+  body.panel-hidden aside { visibility: hidden; padding: 0; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; margin: 0 0 2px; }
+  .sub { color: var(--mute); font-size: 12px; margin: 0 0 14px; }
+  section { border-top: 1px solid var(--line); padding: 14px 0 6px; }
+  h2 { font: 500 10.5px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin: 0 0 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 9px; }
+  .row > span:first-child { color: var(--text); }
+  .val { font: 11px 'JetBrains Mono', monospace; color: var(--mute); min-width: 52px; text-align: right; }
+  select, button, .file { font: inherit; color: var(--text); background: #1d1d21; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  select { width: 100%; margin-bottom: 9px; cursor: pointer; }
+  input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+  .file { display: block; text-align: center; cursor: pointer; border-style: dashed; color: var(--mute); margin-bottom: 10px; }
+  .file:hover { color: var(--text); border-color: var(--accent); }
+  .file input { display: none; }
+  #swatches { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-bottom: 10px; }
+  .sw { width: 26px; height: 26px; border-radius: 50%; padding: 0; background: var(--c); border: 2px solid transparent; outline: 1px solid var(--line); cursor: pointer; }
+  .sw.on { border-color: var(--accent); }
+  .ghost { width: 100%; background: transparent; color: var(--mute); cursor: pointer; }
+  .ghost:hover { color: var(--text); }
+  .hint { color: var(--mute); font-size: 11.5px; margin: 2px 0 8px; }
+  #viewport { position: relative; display: grid; place-items: center; overflow: hidden; background: radial-gradient(ellipse at center, #1a1a1d 0%, #0b0b0c 70%); }
+  #stage { display: block; box-shadow: 0 30px 80px rgba(0,0,0,.55); border-radius: 4px; }
+  #hud { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; gap: 12px; padding: 16px; pointer-events: none; flex-wrap: wrap; }
+  #hud > * { pointer-events: auto; }
+  #rec { display: inline-flex; align-items: center; gap: 10px; padding: 12px 20px 12px 16px; border-radius: 999px; font-weight: 600; background: #f4f3ef; color: #111; border: 0; cursor: pointer; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  #rec i { width: 12px; height: 12px; border-radius: 50%; background: var(--rec); }
+  #rec.on { background: var(--rec); color: #fff; }
+  #rec.on i { background: #fff; border-radius: 2px; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  #download { padding: 11px 16px; border-radius: 999px; background: var(--accent); color: #111; font-weight: 600; text-decoration: none; }
+  #status { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font: 11px 'JetBrains Mono', monospace; color: var(--mute); background: rgba(0,0,0,.45); padding: 6px 10px; border-radius: 6px; max-width: calc(100% - 100px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #togglepanel { position: absolute; top: 10px; left: 10px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+  body.recording aside { pointer-events: none; opacity: .5; }
+  body.drag #viewport::after { content: 'Drop garment (.obj / .glb / .fbx)'; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(0,0,0,.55); }
+  kbd { font: 10.5px 'JetBrains Mono', monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; color: var(--mute); }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 58vh 1fr; }
+    body.panel-hidden #app { grid-template-rows: 1fr 0; grid-template-columns: 1fr; }
+    aside { order: 2; border-right: 0; border-top: 1px solid var(--line); padding: 14px 16px 40px; }
+    #viewport { order: 1; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>Garment Motion Studio</h1>
+    <p class="sub">Auto-rig a garment, animate it, record it.</p>
+
+    <section>
+      <h2>Garment</h2>
+      <label class="file"><input type="file" id="file" accept=".obj,.glb,.gltf,.fbx">Load .obj / .glb / .fbx — or drop it anywhere</label>
+      <div id="parts"></div>
+    </section>
+
+    <section>
+      <h2>Motion</h2>
+      <select id="motion" aria-label="Motion"></select>
+      <label class="row"><span>Speed</span><input type="range" id="speed" min="0.25" max="1.75" step="0.05" value="1"><span class="val" id="speedv">1.00×</span></label>
+    </section>
+
+    <section>
+      <h2>Camera</h2>
+      <select id="camera" aria-label="Camera move"></select>
+      <label class="row"><span>Speed</span><input type="range" id="camspeed" min="0.25" max="2" step="0.05" value="1"><span class="val" id="camspeedv">1.00×</span></label>
+    </section>
+
+    <section>
+      <h2>Look</h2>
+      <select id="body" aria-label="Body">
+        <option value="invisible">Invisible model</option>
+        <option value="mannequin">Body visible</option>
+      </select>
+      <div id="swatches"></div>
+      <label class="row"><span>Floor shadow</span><input type="checkbox" id="shadow" checked></label>
+    </section>
+
+    <section>
+      <h2>Fit</h2>
+      <p class="hint">Auto-fitted. Nudge if the garment sits off the body.</p>
+      <label class="row"><span>Scale</span><input type="range" id="fit-scale" min="0.85" max="1.15" step="0.005"><span class="val" id="fit-scalev"></span></label>
+      <label class="row"><span>Height</span><input type="range" id="fit-lift" min="-0.1" max="0.1" step="0.0025"><span class="val" id="fit-liftv"></span></label>
+      <label class="row"><span>Depth</span><input type="range" id="fit-depth" min="-0.08" max="0.08" step="0.0025"><span class="val" id="fit-depthv"></span></label>
+      <label class="row"><span>Clearance</span><input type="range" id="fit-clearance" min="0" max="0.025" step="0.001"><span class="val" id="fit-clearancev"></span></label>
+      <button class="ghost" id="refit">Reset fit</button>
+    </section>
+
+    <section>
+      <h2>Export</h2>
+      <select id="format" aria-label="Output format"></select>
+      <label class="row"><span>Length</span>
+        <select id="duration" style="width:auto;margin:0">
+          <option value="6">6 s</option><option value="8" selected>8 s</option><option value="10">10 s</option><option value="15">15 s</option><option value="30">30 s</option><option value="0">Until stopped</option>
+        </select></label>
+      <p class="hint">Records the canvas only — no UI. Keep this tab in front while recording. <kbd>R</kbd> toggles.</p>
+    </section>
+  </aside>
+
+  <main id="viewport">
+    <canvas id="stage"></canvas>
+    <button id="togglepanel">☰</button>
+    <div id="status">Starting…</div>
+    <div id="hud">
+      <button id="rec"><i></i><span>Record</span></button>
+      <a id="download" hidden>Download</a>
+    </div>
+  </main>
+</div>
+<script type="module" src="js/studio.js"></script>
+</body>
+</html>
