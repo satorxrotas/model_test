@@ -28,7 +28,7 @@ export function polyFromOBJ(text) {
     }
     start = end + 1;
   }
-  const m = orientFaces(weldPoly({ pos: new Float64Array(P), faces, fmat, matNames }));
+  const m = orientFaces(weldPoly({ pos: new Float64Array(P), faces, fmat, fpanel: pieces(faces, P.length / 3), matNames }));
   // a triangulated quad mesh (common for GLB/FBX → OBJ round trips): rebuild the quads
   const tris = m.faces.reduce((s, f) => s + (f.length === 3), 0);
   return tris > m.faces.length * 0.5 ? pairTriangles(m) : m;
@@ -42,7 +42,9 @@ export function polyFromParts(parts, { pairQuads = true } = {}) {
     for (let i = 0; i < p.pos.length; i++) P.push(p.pos[i]);
     for (let t = 0; t < p.index.length; t += 3) { faces.push([p.index[t] + base, p.index[t + 1] + base, p.index[t + 2] + base]); fmat.push(pi); }
   });
-  const mesh = orientFaces(weldPoly({ pos: new Float64Array(P), faces, fmat, matNames: parts.map((p) => p.material?.name || '') }));
+  // panels = pieces connected in the source's own indexing, i.e. before sewn seams get welded shut
+  const fpanel = pieces(faces, P.length / 3);
+  const mesh = orientFaces(weldPoly({ pos: new Float64Array(P), faces, fmat, fpanel, matNames: parts.map((p) => p.material?.name || '') }));
   return pairQuads ? pairTriangles(mesh) : mesh;
 }
 
@@ -54,13 +56,13 @@ function weldPoly(m) {
     let r = map.get(k); if (r === undefined) { r = out.length / 3; map.set(k, r); out.push(m.pos[i * 3], m.pos[i * 3 + 1], m.pos[i * 3 + 2]); }
     rep[i] = r;
   }
-  const faces = [], fmat = [], seen = new Set();
+  const faces = [], fmat = [], fpanel = [], seen = new Set();
   m.faces.forEach((f, fi) => {
     const g = cleanFace(f.map((v) => rep[v])); if (!g) return;
     const key = [...g].sort((a, b) => a - b).join(); if (seen.has(key)) return; seen.add(key);
-    faces.push(g); fmat.push(m.fmat[fi]);
+    faces.push(g); fmat.push(m.fmat[fi]); fpanel.push(m.fpanel ? m.fpanel[fi] : 0);
   });
-  return { pos: new Float64Array(out), faces, fmat, matNames: m.matNames };
+  return { pos: new Float64Array(out), faces, fmat, fpanel, matNames: m.matNames };
 }
 
 // Make neighbouring faces wind the same way (fixes flipped panels), then point each piece outward.
@@ -102,6 +104,15 @@ function orientFaces(m) {
   return m;
 }
 
+// connected pieces by vertex index (no position welding) → panel id per face
+function pieces(faces, nV) {
+  const par = Int32Array.from({ length: nV }, (_, i) => i);
+  const find = (x) => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+  for (const f of faces) for (let i = 1; i < f.length; i++) { const a = find(f[0]), b = find(f[i]); if (a !== b) par[a] = b; }
+  const id = new Map();
+  return faces.map((f) => { const r = find(f[0]); if (!id.has(r)) id.set(r, id.size); return id.get(r); });
+}
+
 function cleanFace(f) {
   const g = [];
   for (let i = 0; i < f.length; i++) if (f[i] !== f[(i + 1) % f.length]) g.push(f[i]);
@@ -120,7 +131,7 @@ function pairTriangles(m) {
     let best = 0, bl = -1; for (let i = 0; i < 3; i++) { const l = d2(f[i], f[(i + 1) % 3]); if (l > bl) { bl = l; best = i; } }
     longest[fi] = best;
   });
-  const used = new Uint8Array(nF), out = [], fmat = [];
+  const used = new Uint8Array(nF), out = [], fmat = [], fpanel = [];
   const nrm = faces.map((f) => newell(pos, f));
   faces.forEach((f, fi) => {
     if (used[fi]) return;
@@ -128,18 +139,18 @@ function pairTriangles(m) {
       const k = longest[fi], a = f[k], b = f[(k + 1) % 3], c = f[(k + 2) % 3];
       const e = edges.get(ekey(a, b));
       const g = e && e.length === 2 ? (e[0].f === fi ? e[1].f : e[0].f) : -1;
-      if (g >= 0 && !used[g] && faces[g].length === 3 && m.fmat[g] === m.fmat[fi]) {
+      if (g >= 0 && !used[g] && faces[g].length === 3 && m.fmat[g] === m.fmat[fi] && m.fpanel[g] === m.fpanel[fi]) {
         const fg = faces[g], kg = longest[g];
         const lg = ekey(fg[kg], fg[(kg + 1) % 3]);
         if (lg === ekey(a, b) && nrm[fi].dot(nrm[g]) > 0.86) {
           const d = fg.find((v) => v !== a && v !== b);
-          used[fi] = used[g] = 1; out.push([a, d, b, c]); fmat.push(m.fmat[fi]); return;
+          used[fi] = used[g] = 1; out.push([a, d, b, c]); fmat.push(m.fmat[fi]); fpanel.push(m.fpanel[fi]); return;
         }
       }
     }
-    used[fi] = 1; out.push(f); fmat.push(m.fmat[fi]);
+    used[fi] = 1; out.push(f); fmat.push(m.fmat[fi]); fpanel.push(m.fpanel[fi]);
   });
-  return { ...m, faces: out, fmat };
+  return { ...m, faces: out, fmat, fpanel };
 }
 
 /* ---------------- helpers ---------------- */
@@ -175,6 +186,17 @@ export function faceStats(m) {
   return { faces: m.faces.length, quads: q, tris: t, ngons: m.faces.length - q - t, verts: m.pos.length / 3 };
 }
 
+// How much of the mesh is a real quad grid: share of interior vertices where exactly four quads meet.
+// (Irregular triangle meshes paired into quads score low even when most faces are quads.)
+export function gridScore(m) {
+  const nV = m.pos.length / 3, quadsAt = new Uint16Array(nV), facesAt = new Uint16Array(nV), edges = buildEdges(m.faces, nV), border = new Uint8Array(nV);
+  for (const [k, e] of edges) if (e.length === 1) { border[Math.floor(k / 67108864)] = 1; border[k % 67108864] = 1; }
+  for (const f of m.faces) for (const v of f) { facesAt[v]++; if (f.length === 4) quadsAt[v]++; }
+  let interior = 0, regular = 0;
+  for (let v = 0; v < nV; v++) { if (border[v] || !facesAt[v]) continue; interior++; if (facesAt[v] === 4 && quadsAt[v] === 4) regular++; }
+  return interior ? regular / interior : 0;
+}
+
 /* ---------------- quad-preserving reduction ---------------- */
 
 export function makeSurface(m) {
@@ -183,7 +205,7 @@ export function makeSurface(m) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(m.pos), 3));
   g.setIndex(tris);
-  return new MeshBVH(g);
+  return new MeshBVH(g, { indirect: true }); // keep triangle order so faceIndex maps back to source faces
 }
 
 /**
@@ -191,7 +213,7 @@ export function makeSurface(m) {
  * surface: MeshBVH of the original, used to snap the relaxed grid back onto the original shape.
  */
 export function reduceQuads(src, targetFaces, { surface, relax = 6, onPass } = {}) {
-  let pos = Float64Array.from(src.pos), faces = src.faces.map((f) => f.slice()), fmat = src.fmat.slice();
+  let pos = Float64Array.from(src.pos), faces = src.faces.map((f) => f.slice()), fmat = src.fmat.slice(), fpanel = (src.fpanel || src.fmat.map(() => 0)).slice();
   // target edge length for an even grid: total area / target faces = h²
   let area = 0; for (const f of faces) area += polyArea(pos, f);
   let h = Math.sqrt(area / Math.max(1, targetFaces)), stalls = 0;
@@ -289,16 +311,16 @@ export function reduceQuads(src, targetFaces, { surface, relax = 6, onPass } = {
     }
     const remap = new Int32Array(nV).fill(-1), np = [];
     for (let v = 0; v < nV; v++) { const r = find(v); if (remap[r] < 0) { remap[r] = np.length / 3; np.push(acc[r * 4] / acc[r * 4 + 3], acc[r * 4 + 1] / acc[r * 4 + 3], acc[r * 4 + 2] / acc[r * 4 + 3]); } }
-    const nf = [], nm = [], dup = new Set();
+    const nf = [], nm = [], np2 = [], dup = new Set();
     faces.forEach((f, fi) => {
       const g = cleanFace(f.map((v) => remap[find(v)])); if (!g) return;
       const key = [...g].sort((a, b) => a - b).join(); if (dup.has(key)) return; dup.add(key);
-      nf.push(g); nm.push(fmat[fi]);
+      nf.push(g); nm.push(fmat[fi]); np2.push(fpanel[fi]);
     });
-    pos = Float64Array.from(np); faces = nf; fmat = nm;
+    pos = Float64Array.from(np); faces = nf; fmat = nm; fpanel = np2;
     onPass && onPass(pass, faces.length);
   }
-  const out = dropUnused({ pos, faces, fmat, matNames: src.matNames });
+  const out = dropUnused({ pos, faces, fmat, fpanel, matNames: src.matNames });
   if (surface && relax) relaxOnto(out, surface, relax);
   return out;
 }
@@ -398,4 +420,18 @@ export function polyWire(m) {
   }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(L, 3));
   return g;
+}
+
+// Give each face of `m` the panel of the nearest face on the source (`base` + its BVH `surface`).
+export function panelsFrom(m, base, surface) {
+  const triFace = [];
+  base.faces.forEach((f, fi) => { for (let k = 1; k + 1 < f.length; k++) triFace.push(fi); });
+  const v = new THREE.Vector3(), hit = {};
+  m.fpanel = m.faces.map((f) => {
+    v.set(0, 0, 0); for (const i of f) v.x += m.pos[i * 3], v.y += m.pos[i * 3 + 1], v.z += m.pos[i * 3 + 2];
+    v.divideScalar(f.length);
+    const r = surface.closestPointToPoint(v, hit);
+    return r ? base.fpanel[triFace[r.faceIndex]] : 0;
+  });
+  return m;
 }

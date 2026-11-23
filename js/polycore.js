@@ -44,21 +44,22 @@ export function extractParts(root, { flipV = false } = {}) {
 // Merge bit-identical vertices (position + normal + uv). Exact matches only, so UV seams and hard edges survive.
 function weld(P, N, U) {
   const n = P.length / 3;
-  const pb = new Uint32Array(P.buffer), nb = N ? new Uint32Array(N.buffer) : null, ub = U ? new Uint32Array(U.buffer) : null;
+  const pb = new Uint32Array(P.buffer), ub = U ? new Uint32Array(U.buffer) : null;
   let size = 1; while (size < n * 2) size <<= 1;
   const table = new Int32Array(size).fill(-1), mask = size - 1;
   const remap = new Uint32Array(n), first = new Uint32Array(n);
   let unique = 0;
+  // same position + UV, and normals within ~25° (merges faceted normals that loaders generate for files
+  // without normals, but keeps real hard edges split)
   const same = (a, b) => {
     for (let c = 0; c < 3; c++) if (pb[a * 3 + c] !== pb[b * 3 + c]) return false;
-    if (nb) for (let c = 0; c < 3; c++) if (nb[a * 3 + c] !== nb[b * 3 + c]) return false;
     if (ub) for (let c = 0; c < 2; c++) if (ub[a * 2 + c] !== ub[b * 2 + c]) return false;
+    if (N && N[a * 3] * N[b * 3] + N[a * 3 + 1] * N[b * 3 + 1] + N[a * 3 + 2] * N[b * 3 + 2] < 0.9) return false;
     return true;
   };
   for (let i = 0; i < n; i++) {
     let h = 2166136261;
     for (let c = 0; c < 3; c++) h = Math.imul(h ^ pb[i * 3 + c], 16777619);
-    if (nb) for (let c = 0; c < 3; c++) h = Math.imul(h ^ nb[i * 3 + c], 16777619);
     if (ub) for (let c = 0; c < 2; c++) h = Math.imul(h ^ ub[i * 2 + c], 16777619);
     let slot = (h >>> 0) & mask;
     for (;;) {
@@ -72,8 +73,11 @@ function weld(P, N, U) {
   for (let u = 0; u < unique; u++) {
     const s = first[u];
     pos[u * 3] = P[s * 3]; pos[u * 3 + 1] = P[s * 3 + 1]; pos[u * 3 + 2] = P[s * 3 + 2];
-    if (nrm) { nrm[u * 3] = N[s * 3]; nrm[u * 3 + 1] = N[s * 3 + 1]; nrm[u * 3 + 2] = N[s * 3 + 2]; }
     if (uv) { uv[u * 2] = U[s * 2]; uv[u * 2 + 1] = U[s * 2 + 1]; }
+  }
+  if (nrm) {
+    for (let i = 0; i < n; i++) { const u = remap[i]; nrm[u * 3] += N[i * 3]; nrm[u * 3 + 1] += N[i * 3 + 1]; nrm[u * 3 + 2] += N[i * 3 + 2]; }
+    for (let u = 0; u < unique; u++) { const l = Math.hypot(nrm[u * 3], nrm[u * 3 + 1], nrm[u * 3 + 2]) || 1; nrm[u * 3] /= l; nrm[u * 3 + 1] /= l; nrm[u * 3 + 2] /= l; }
   }
   // drop triangles that welding made degenerate
   const idx = new Uint32Array(n); let k = 0;
@@ -95,6 +99,7 @@ export function simplifyParts(parts, ratio, opts = {}) {
   const flags = [];
   if (opts.lockBorder) flags.push('LockBorder');
   if (opts.prune) flags.push('Prune');
+  if (opts.regularize !== false) flags.push('Regularize'); // even triangles, far fewer slivers
   // Permissive: collapses may cross UV seams / hard edges; UVs are passed as attributes so
   // texture distortion is still penalised.
   if (opts.mergeSeams) flags.push('Permissive');

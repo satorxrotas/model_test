@@ -1,64 +1,180 @@
-// Automatic UV unwrap for polygon meshes (quads stay whole):
-// 1. split into islands by surface direction (like Blender's Smart UV Project, 66° limit)
-// 2. flatten each island with LSCM (least-squares conformal maps) so angles are kept and stretch stays low
-// 3. scale islands to one texel density, rotate to their tightest box, shelf-pack into 0..1 with a margin
+// Automatic UV unwrap for polygon meshes (quads stay whole).
+// Islands:
+//   'frontback' (default, for garments): each piece is split into a front and a back half, like a basic
+//            sewing pattern (pants → front + back). Longest unbroken runs for stripes and prints.
+//   'panels': follow the panels/pieces cut in the source file (e.g. Marvelous pattern pieces);
+//            pieces that can't lie flat in one go are split front/back.
+//   Anything still not flat after that falls back to splitting by surface direction.
+//   'smart':  split by surface direction (like Blender's Smart UV Project, 66° limit).
+// Each island is flattened with LSCM (conformal, low stretch) and scaled to one texel density.
+// upright: every island is turned so "up" on the model is "up" in the texture (stripes run level).
+// alignHeight: islands keep their real height in the layout, so stripes line up across seams.
+// level: V is locked to the model's height (U re-solved conformally), so stripes are level bands
+//        that meet exactly at every seam; islands that would fold keep the plain flatten.
 import { newell } from './quadmesh.js';
 
 const ekey = (a, b) => (a < b ? a * 67108864 + b : b * 67108864 + a);
 
-export function unwrap(m, { angle = 66, margin = 0.004 } = {}) {
+export function unwrap(m, { mode = 'frontback', upright = true, alignHeight = true, level = true, angle = 66, margin = 0.004 } = {}) {
   const { pos, faces } = m, nF = faces.length;
   const fn = faces.map((f) => newell(pos, f));
   const farea = faces.map((f) => polyArea(pos, f));
-
-  // face adjacency
   const edges = new Map();
   faces.forEach((f, fi) => { for (let i = 0; i < f.length; i++) { const k = ekey(f[i], f[(i + 1) % f.length]); const e = edges.get(k); if (e) e.push(fi); else edges.set(k, [fi]); } });
   const adj = faces.map(() => []);
   for (const e of edges.values()) if (e.length === 2) { adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); }
+  const ctx = { m, fn, farea, adj, angle };
 
-  // 1. islands: grow from the largest unassigned face while normals stay inside the cone
-  const cosA = Math.cos((angle * Math.PI) / 180), island = new Int32Array(nF).fill(-1);
-  const order = [...faces.keys()].sort((a, b) => farea[b] - farea[a]);
-  let nI = 0;
-  for (const seed of order) {
-    if (island[seed] >= 0) continue;
-    const sn = fn[seed], id = nI++, q = [seed]; island[seed] = id;
-    for (let h = 0; h < q.length; h++) for (const g of adj[q[h]]) {
-      if (island[g] >= 0 || fn[g].dot(sn) < cosA) continue;
-      island[g] = id; q.push(g);
-    }
-  }
-  // fold tiny islands into the neighbour they share most edges with
-  const members = () => { const L = Array.from({ length: nI }, () => []); island.forEach((i, f) => L[i].push(f)); return L; };
-  let L = members();
-  const total = farea.reduce((s, a) => s + a, 0);
-  for (let i = 0; i < nI; i++) {
-    const a = L[i].reduce((s, f) => s + farea[f], 0);
-    if (L[i].length > 3 && a > total * 0.0005) continue;
-    const cnt = new Map();
-    for (const f of L[i]) for (const g of adj[f]) if (island[g] !== i) cnt.set(island[g], (cnt.get(island[g]) || 0) + 1);
-    if (!cnt.size) continue;
-    const to = [...cnt.entries()].sort((x, y) => y[1] - x[1])[0][0];
-    for (const f of L[i]) island[f] = to;
-    L[to].push(...L[i]); L[i] = [];
-  }
-  L = L.filter((x) => x.length);
+  let L = mode === 'smart' ? segmentSmart(ctx, [...faces.keys()]) : segmentPanels(ctx, mode === 'panels' ? cleanPanels(ctx) : faces.map(() => 0));
+  L = mergeTiny(ctx, L);
+  // which garment (connected piece) each island belongs to: height alignment only matters within one
+  const piece = new Int32Array(nF).fill(-1);
+  groupsBy(ctx, [...faces.keys()], () => 0).forEach((g, i) => g.forEach((f) => { piece[f] = i; }));
 
-  // 2. flatten each island
-  const charts = L.map((fs) => flatten(pos, faces, fs, fn));
+  const charts = L.map((fs) => Object.assign(flatten(pos, faces, fs, fn), { piece: piece[fs[0]] }));
+  let levelled = 0;
+  if (upright) for (const c of charts) { orientUp(c, pos); if (level && levelChart(c, pos)) levelled++; }
+  pack(charts, margin, { upright, alignHeight, pos });
 
-  // 3. pack
-  pack(charts, margin);
-
-  // assemble per-corner UVs
   const uvs = [], uvVert = [], corner = new Array(nF);
   for (const c of charts) {
     const base = uvVert.length;
     for (let i = 0; i < c.verts.length; i++) { uvVert.push(c.verts[i]); uvs.push(c.u[i], c.v[i]); }
     c.faces.forEach((fi) => { corner[fi] = faces[fi].map((v) => base + c.local.get(v)); });
   }
-  return { uvs: Float32Array.from(uvs), uvVert: Int32Array.from(uvVert), corner, islands: charts.length };
+  return { uvs: Float32Array.from(uvs), uvVert: Int32Array.from(uvVert), corner, islands: charts.length, levelled, mode };
+}
+
+/* ---------- segmentation ---------- */
+
+// connected groups of `fs` where neighbours share the same key
+function groupsBy(ctx, fs, key) {
+  const inSet = new Set(fs), seen = new Set(), out = [];
+  for (const f0 of fs) {
+    if (seen.has(f0)) continue;
+    const q = [f0]; seen.add(f0);
+    for (let h = 0; h < q.length; h++) for (const g of ctx.adj[q[h]]) if (inSet.has(g) && !seen.has(g) && key(g) === key(q[h])) { seen.add(g); q.push(g); }
+    out.push(q);
+  }
+  return out;
+}
+
+// a piece can be flattened in one go when it is a topological disk: one boundary loop, Euler characteristic 1
+function isDisk(ctx, fs) {
+  const faces = ctx.m.faces, ec = new Map(), verts = new Set();
+  for (const f of fs) { const fv = faces[f]; for (let i = 0; i < fv.length; i++) { verts.add(fv[i]); const k = ekey(fv[i], fv[(i + 1) % fv.length]); ec.set(k, (ec.get(k) || 0) + 1); } }
+  let E = 0; const bnd = [];
+  for (const [k, n] of ec) { if (n > 2) return false; E++; if (n === 1) bnd.push(k); }
+  if (verts.size - E + fs.length !== 1 || !bnd.length) return false;
+  const par = new Map(), find = (x) => { while (par.get(x) !== x) { par.set(x, par.get(par.get(x))); x = par.get(x); } return x; };
+  for (const k of bnd) for (const v of [Math.floor(k / 67108864), k % 67108864]) if (!par.has(v)) par.set(v, v);
+  for (const k of bnd) { const a = find(Math.floor(k / 67108864)), b = find(k % 67108864); if (a !== b) par.set(a, b); }
+  const roots = new Set(); for (const v of par.keys()) roots.add(find(v));
+  return roots.size === 1;
+}
+
+// panel labels near seams can be noisy (nearest-face lookup on a simplified mesh): smooth them and
+// fold scraps under 1% of their piece into the neighbouring panel
+function cleanPanels(ctx) {
+  const { m, adj, farea } = ctx;
+  let lab = (m.fpanel || m.faces.map(() => 0)).slice();
+  for (let it = 0; it < 4; it++) {
+    const nx = lab.slice();
+    lab.forEach((l, f) => {
+      const votes = new Map([[l, 1.5]]);
+      for (const g of adj[f]) votes.set(lab[g], (votes.get(lab[g]) || 0) + 1);
+      let best = l, bv = -1; for (const [k, v] of votes) if (v > bv) { bv = v; best = k; }
+      nx[f] = best;
+    });
+    lab = nx;
+  }
+  const groups = groupsBy(ctx, [...m.faces.keys()], (f) => lab[f]);
+  const total = farea.reduce((a, b) => a + b, 0);
+  for (const g of groups) {
+    const a = g.reduce((s, f) => s + farea[f], 0);
+    if (a > total * 0.01) continue;
+    const cnt = new Map(); for (const f of g) for (const h of adj[f]) if (lab[h] !== lab[f]) cnt.set(lab[h], (cnt.get(lab[h]) || 0) + 1);
+    if (!cnt.size) continue;
+    const to = [...cnt.entries()].sort((x, y) => y[1] - x[1])[0][0];
+    for (const f of g) lab[f] = to;
+  }
+  return lab;
+}
+
+function segmentPanels(ctx, panel) {
+  const out = [], { m } = ctx;
+  for (const g of groupsBy(ctx, [...m.faces.keys()], (f) => panel[f])) {
+    if (isDisk(ctx, g)) { out.push(g); continue; }
+    // not flat in one piece (e.g. a leg tube or a whole welded garment): front / back halves, like a pattern
+    for (const h of splitFrontBack(ctx, g)) {
+      if (isDisk(ctx, h) || h.length < 4) out.push(h);
+      else out.push(...segmentSmart(ctx, h));
+    }
+  }
+  return out;
+}
+
+function splitFrontBack(ctx, fs) {
+  const { fn, farea, adj } = ctx, inSet = new Set(fs);
+  // smooth normals over the surface so wrinkles don't fray the seam
+  let nz = new Map(fs.map((f) => [f, fn[f].z * farea[f]]));
+  for (let it = 0; it < 12; it++) {
+    const nx = new Map();
+    for (const f of fs) { let s = nz.get(f); for (const g of adj[f]) if (inSet.has(g)) s += nz.get(g); nx.set(f, s); }
+    nz = nx;
+  }
+  let side = new Map(fs.map((f) => [f, nz.get(f) >= 0 ? 0 : 1]));
+  for (let it = 0; it < 6; it++) {
+    const nx = new Map();
+    for (const f of fs) { let a = side.get(f) ? 1.5 : -1.5; for (const g of adj[f]) if (inSet.has(g)) a += side.get(g) ? 1 : -1; nx.set(f, a > 0 ? 1 : 0); }
+    side = nx;
+  }
+  return groupsBy(ctx, fs, (f) => side.get(f));
+}
+
+function segmentSmart(ctx, fs) {
+  const { fn, farea, adj, angle } = ctx, cosA = Math.cos((angle * Math.PI) / 180), inSet = new Set(fs), island = new Map(), out = [];
+  for (const seed of [...fs].sort((a, b) => farea[b] - farea[a])) {
+    if (island.has(seed)) continue;
+    const sn = fn[seed], q = [seed]; island.set(seed, out.length);
+    for (let h = 0; h < q.length; h++) for (const g of adj[q[h]]) {
+      if (!inSet.has(g) || island.has(g) || fn[g].dot(sn) < cosA) continue;
+      island.set(g, out.length); q.push(g);
+    }
+    out.push(q);
+  }
+  return out;
+}
+
+// fold slivers (a few faces / tiny area) into the neighbouring island they touch most
+function mergeTiny(ctx, L) {
+  const { farea, adj } = ctx, total = farea.reduce((s, a) => s + a, 0), owner = new Map();
+  L.forEach((fs, i) => fs.forEach((f) => owner.set(f, i)));
+  for (let i = 0; i < L.length; i++) {
+    const a = L[i].reduce((s, f) => s + farea[f], 0);
+    if (L[i].length > 3 && a > total * 0.0005) continue;
+    const cnt = new Map();
+    for (const f of L[i]) for (const g of adj[f]) { const o = owner.get(g); if (o !== i) cnt.set(o, (cnt.get(o) || 0) + 1); }
+    if (!cnt.size) continue;
+    const to = [...cnt.entries()].sort((x, y) => y[1] - x[1])[0][0];
+    for (const f of L[i]) owner.set(f, to);
+    L[to].push(...L[i]); L[i] = [];
+  }
+  return L.filter((x) => x.length);
+}
+
+// turn the island so the model's up direction (+Y) points along +V
+function orientUp(c, pos) {
+  let gx = 0, gy = 0;
+  for (const [a, b, d] of c.tris) {
+    const u1 = c.u[b] - c.u[a], v1 = c.v[b] - c.v[a], u2 = c.u[d] - c.u[a], v2 = c.v[d] - c.v[a];
+    const det = u1 * v2 - u2 * v1; if (Math.abs(det) < 1e-18) continue;
+    const h0 = pos[c.verts[a] * 3 + 1], h1 = pos[c.verts[b] * 3 + 1] - h0, h2 = pos[c.verts[d] * 3 + 1] - h0;
+    const w = Math.abs(det) / 2;
+    gx += w * ((h1 * v2 - h2 * v1) / det); gy += w * ((u1 * h2 - u2 * h1) / det);
+  }
+  if (Math.hypot(gx, gy) < 1e-12) return;
+  rotate(c, Math.PI / 2 - Math.atan2(gy, gx));
 }
 
 function polyArea(pos, f) {
@@ -126,8 +242,8 @@ function flatten(pos, faces, fs, fn) {
     const r = new Float64Array(2 * n), p = new Float64Array(2 * n), Ap = new Float64Array(2 * n);
     Ax(x, r); for (let i = 0; i < 2 * n; i++) r[i] = pinned[i >> 1] ? 0 : -r[i];
     p.set(r); let rr = dot2(r, r); const rr0 = rr;
-    const maxIt = Math.min(2000, 40 + 4 * Math.sqrt(n) * 10);
-    for (let it = 0; it < maxIt && rr > rr0 * 1e-12 && rr > 1e-30; it++) {
+    const maxIt = Math.min(700, 60 + 12 * Math.sqrt(n));
+    for (let it = 0; it < maxIt && rr > rr0 * 1e-9 && rr > 1e-30; it++) {
       Ax(p, Ap); for (let i = 0; i < 2 * n; i++) if (pinned[i >> 1]) Ap[i] = 0;
       const alpha = rr / (dot2(p, Ap) || 1e-30);
       for (let i = 0; i < 2 * n; i++) { x[i] += alpha * p[i]; r[i] -= alpha * Ap[i]; }
@@ -147,7 +263,48 @@ function flatten(pos, faces, fs, fn) {
   const s = a2 > 0 ? Math.sqrt(a3 / a2) : 1;
   const u = new Float64Array(n), v = new Float64Array(n);
   for (let i = 0; i < n; i++) { u[i] = x[2 * i] * s; v[i] = x[2 * i + 1] * s; }
-  return { faces: fs, verts, local, u, v, tris: T.map((t) => t.i) };
+  return { faces: fs, verts, local, u, v, tris: T.map((t) => t.i), T };
+}
+
+// Lock V to the model's height (so every stripe is a level band that meets itself at every seam) and
+// re-solve only U with the same conformal energy. Reverts if the island would fold (e.g. flat tops).
+function levelChart(c, pos) {
+  const n = c.u.length, T = c.T;
+  if (!T || T.length < 2) return false;
+  const y = new Float64Array(n);
+  let y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) { y[i] = pos[c.verts[i] * 3 + 1]; y0 = Math.min(y0, y[i]); y1 = Math.max(y1, y[i]); }
+  let area = 0; for (const t of c.tris) area += Math.abs(triArea(c, t));
+  if (y1 - y0 < 0.25 * Math.sqrt(area)) return false; // island is mostly horizontal: leave it
+  // the conformal scale of LSCM vs. 3D units: coefficients were built in 3D units, U/V are in 3D units too
+  const x = Float64Array.from(c.u);
+  const apply = (X, Y, out) => {
+    out.fill(0);
+    for (const t of T) {
+      let re = 0, im = 0;
+      for (let j = 0; j < 3; j++) { const [cr, ci] = t.c[j], k = t.i[j], yy = Y ? Y[k] : 0; re += cr * X[k] - ci * yy; im += ci * X[k] + cr * yy; }
+      for (let j = 0; j < 3; j++) { const [cr, ci] = t.c[j]; out[t.i[j]] += cr * re + ci * im; }
+    }
+  };
+  const r = new Float64Array(n), p = new Float64Array(n), Ap = new Float64Array(n);
+  apply(x, y, r); for (let i = 0; i < n; i++) r[i] = -r[i]; r[0] = 0;
+  p.set(r); let rr = dot2(r, r); const rr0 = rr;
+  const maxIt = Math.min(900, 80 + 12 * Math.sqrt(n));
+  for (let it = 0; it < maxIt && rr > rr0 * 1e-10 && rr > 1e-30; it++) {
+    apply(p, null, Ap); Ap[0] = 0;
+    const alpha = rr / (dot2(p, Ap) || 1e-30);
+    for (let i = 0; i < n; i++) { x[i] += alpha * p[i]; r[i] -= alpha * Ap[i]; }
+    const rn = dot2(r, r), beta = rn / rr; rr = rn;
+    for (let i = 0; i < n; i++) p[i] = r[i] + beta * p[i];
+  }
+  // fold check: triangles must keep one orientation
+  let pos2 = 0, neg = 0;
+  for (const [a, b, d] of c.tris) { const s2 = (x[b] - x[a]) * (y[d] - y[a]) - (x[d] - x[a]) * (y[b] - y[a]); if (s2 > 0) pos2++; else if (s2 < 0) neg++; }
+  if (neg > pos2) { for (let i = 0; i < n; i++) x[i] = -x[i]; const t = pos2; pos2 = neg; neg = t; }
+  if (!Number.isFinite(x[0]) || neg > c.tris.length * 0.01) return false;
+  let xm = Infinity; for (let i = 0; i < n; i++) xm = Math.min(xm, x[i]);
+  for (let i = 0; i < n; i++) { c.u[i] = x[i] - xm; c.v[i] = y[i] - y0; }
+  return true;
 }
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -166,9 +323,17 @@ function hull(px, py) {
   return lower.slice(0, -1).concat(upper.slice(0, -1));
 }
 
-function pack(charts, margin) {
-  // rotate each chart to its minimum-area bounding box
+function pack(charts, margin, opts = {}) {
+  for (const c of charts) { c.area = 0; for (const t of c.tris) c.area += Math.abs(triArea(c, t)); }
+  if (opts.upright && opts.alignHeight) {
+    const blocks = heightBlocks(charts, opts.pos);
+    pack(blocks, margin, { upright: true });
+    for (const b of blocks) for (const [c, off] of b.members) for (let i = 0; i < c.u.length; i++) { c.u[i] = b.u[off + i]; c.v[i] = b.v[off + i]; }
+    return;
+  }
+  // rotate each chart to its minimum-area bounding box (only when islands may turn)
   for (const c of charts) {
+    if (opts.upright) break;
     const H = hull(c.u, c.v);
     let best = { area: Infinity, ang: 0 };
     for (let k = 0; k < H.length; k++) {
@@ -193,7 +358,7 @@ function pack(charts, margin) {
     let ok = true;
     for (const c of order) {
       let best = null;
-      for (const rot of [0, 1]) {
+      for (const rot of opts.upright ? [0] : [0, 1]) {
         const cells = rasterize(c, scale, pad, rot);
         if (cells.w > R || cells.h > R) continue;
         const spot = findSpot(grid, R, cells, best ? best.y * R + best.x : Infinity);
@@ -217,6 +382,40 @@ function pack(charts, margin) {
   }
   const S = Math.max(mx, my) + result.pad * 0.5, m = margin;
   for (const [c] of result.placed) for (let i = 0; i < c.u.length; i++) { c.u[i] = m + (c.u[i] / S) * (1 - 2 * m); c.v[i] = m + (c.v[i] / S) * (1 - 2 * m); }
+}
+
+// Per garment: keep every island at its real height (stripes meet across seams), slide islands sideways
+// until they don't overlap, and return the garment as one rigid block for the packer.
+function heightBlocks(charts, pos) {
+  const byPiece = new Map();
+  for (const c of charts) { if (!byPiece.has(c.piece)) byPiece.set(c.piece, []); byPiece.get(c.piece).push(c); }
+  const blocks = [];
+  for (const group of byPiece.values()) {
+    for (const c of group) { let o = 0; for (let i = 0; i < c.u.length; i++) o += pos[c.verts[i] * 3 + 1] - c.v[i]; c.off = o / c.u.length; }
+    const lo = Math.min(...group.map((c) => c.off)), hi = Math.max(...group.map((c) => c.off + Math.max(...c.v)));
+    const R = 192, scale = (R * 0.98) / Math.max(1e-9, hi - lo), pad = 1.5, W = R * 8, grid = new Uint8Array(R * W);
+    const place = [];
+    for (const c of [...group].sort((a, b) => b.area - a.area)) {
+      const cells = rasterize(c, scale, pad, 0), y = Math.max(0, Math.min(R - cells.h, Math.round((c.off - lo) * scale)));
+      let x = 0;
+      for (; x + cells.w <= W; x++) { let free = true; for (const [cx, cy] of cells.list) if (grid[(y + cy) * W + x + cx]) { free = false; break; } if (free) break; }
+      for (const [cx, cy] of cells.list) if (x + cx < W) grid[(y + cy) * W + x + cx] = 1;
+      place.push([c, x, y]);
+    }
+    // merge into one block in world units
+    const b = { u: [], v: [], tris: [], members: [] };
+    for (const [c, x, y] of place) {
+      const off = b.u.length;
+      for (let i = 0; i < c.u.length; i++) { b.u.push(c.u[i] + (x + pad) / scale); b.v.push(c.v[i] + (y + pad) / scale); }
+      for (const [p, q, r] of c.tris) b.tris.push([p + off, q + off, r + off]);
+      b.members.push([c, off]);
+    }
+    b.u = Float64Array.from(b.u); b.v = Float64Array.from(b.v);
+    let x0 = Infinity, y0 = Infinity; for (let i = 0; i < b.u.length; i++) { x0 = Math.min(x0, b.u[i]); y0 = Math.min(y0, b.v[i]); }
+    for (let i = 0; i < b.u.length; i++) { b.u[i] -= x0; b.v[i] -= y0; }
+    blocks.push(b);
+  }
+  return blocks;
 }
 
 function rotate(c, ang) {

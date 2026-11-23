@@ -68,6 +68,8 @@
   body.drag main::after { content: 'Drop model (and its .mtl / textures, or a .zip)'; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(0,0,0,.6); }
   #uvmap { width: 100%; aspect-ratio: 1; display: block; border-radius: 8px; border: 1px solid var(--line); }
   body.quadmode .tri-only, body:not(.quadmode) .quad-only { display: none; }
+  body:not(.autouv) .uv-opts { display: none; }
+  .seg button { padding-left: 4px; padding-right: 4px; }
   .seg button { white-space: nowrap; }
   /* password gate */
   body.locked #app, body.locked .tabs { display: none; }
@@ -138,6 +140,7 @@
         <button class="chip" data-pct="50">50%</button><button class="chip" data-pct="25">25%</button><button class="chip" data-pct="10">10%</button><button class="chip" data-pct="5">5%</button><button class="chip" data-pct="2">2%</button><button class="chip" data-pct="1">1%</button>
       </div>
       <label class="row"><span>Target <span id="unit">faces</span></span><input type="number" id="target" min="1" step="1" style="width:130px"></label>
+      <label class="check tri-only"><input type="checkbox" id="regularize" checked><span>Even triangles<small>Even-sized triangles, almost no slivers. Cleaner for unwrapping and texturing.</small></span></label>
       <label class="check tri-only"><input type="checkbox" id="shading" checked><span>Preserve shading<small>Keeps curvature where normals change.</small></span></label>
       <label class="check tri-only"><input type="checkbox" id="lockBorder"><span>Protect open edges<small>Hems, cuffs and seams between parts stay exact.</small></span></label>
       <label class="check tri-only"><input type="checkbox" id="mergeSeams"><span>Allow collapsing across UV seams<small>Goes much lower. Textures can stretch slightly near seams.</small></span></label>
@@ -146,7 +149,14 @@
 
     <section class="needs-model">
       <h2>UVs</h2>
-      <label class="check"><input type="checkbox" id="autoUV" checked><span>Auto UV unwrap<small>Islands split by surface direction (like Smart UV Project), flattened with low stretch, packed at even texel density. Replaces the original UVs.</small></span></label>
+      <label class="check"><input type="checkbox" id="autoUV" checked><span>Auto UV unwrap<small>Flattened with low stretch and packed at even texel density. Replaces the original UVs.</small></span></label>
+      <div class="uv-opts">
+        <p class="hint" style="margin:4px 0 6px">Islands</p>
+        <div class="seg"><button data-islands="frontback" class="on">Front / back</button><button data-islands="panels">Model's panels</button><button data-islands="smart">By direction</button></div>
+        <p class="hint" style="margin-top:-4px">Front / back cuts each piece like a basic sewing pattern (pants → front + back). Model's panels follows the seams in your file (e.g. Marvelous pattern pieces).</p>
+        <label class="check"><input type="checkbox" id="upright" checked><span>Keep islands upright<small>Up on the model is up in the texture; islands keep their real height.</small></span></label>
+        <label class="check"><input type="checkbox" id="level" checked><span>Level stripes across seams<small>Horizontal stripes and prints run level and meet exactly at every seam.</small></span></label>
+      </div>
       <div id="uvbox" hidden>
         <canvas id="uvmap" aria-label="UV layout preview"></canvas>
         <div class="row" style="margin-top:6px"><span class="hint" id="uvinfo" style="margin:0"></span><button class="link" id="uv-png" style="padding:0">UV layout .png</button></div>
@@ -155,7 +165,7 @@
 
     <section class="needs-model">
       <h2>View</h2>
-      <div class="seg"><button data-look="material" class="on">Material</button><button data-look="checker">UV checker</button></div>
+      <div class="seg"><button data-look="material" class="on">Material</button><button data-look="checker">Checker</button><button data-look="stripes">Stripes</button></div>
       <div class="seg"><button data-view="split" class="on">Split</button><button data-view="original">Original</button><button data-view="low">Low poly</button></div>
       <label class="check"><input type="checkbox" id="wire"><span>Wireframe</span></label>
       <label class="check"><input type="checkbox" id="spin"><span>Auto-rotate</span></label>

@@ -11,7 +11,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { zipSync, unzipSync, strToU8 } from 'three/addons/libs/fflate.module.js';
 import { MeshoptDecoder } from '../vendor/meshoptimizer/meshopt_decoder.module.js';
 import { ready, extractParts, simplifyParts, toGeometry, countTris, countVerts, writeOBJ, writePolyOBJ, textureBytes } from './polycore.js';
-import { polyFromOBJ, polyFromParts, makeSurface, reduceQuads, faceStats, polyToGeometry, polyWire } from './quadmesh.js';
+import { polyFromOBJ, polyFromParts, makeSurface, reduceQuads, faceStats, gridScore, polyToGeometry, polyWire, panelsFrom } from './quadmesh.js';
 import { unwrap, coverage } from './uvunwrap.js';
 
 const $ = (s) => document.querySelector(s);
@@ -21,7 +21,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 const ms = (t) => (t < 1000 ? `${Math.round(t)} ms` : `${(t / 1000).toFixed(1)} s`);
 
 const MODEL_EXT = ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply'];
-const state = { ratio: 0.25, topo: 'quads', autoUV: true, look: 'material', lockBorder: false, prune: false, shading: true, mergeSeams: false, view: 'split', wire: false, spin: false, split: 0.5 };
+const state = { ratio: 0.25, topo: 'quads', autoUV: true, islands: 'frontback', upright: true, level: true, look: 'material', regularize: true, lockBorder: false, prune: false, shading: true, mergeSeams: false, view: 'split', wire: false, spin: false, split: 0.5 };
 let parts = null, simplified = null, baseName = 'model', fileMap = new Map();
 let base = null, surface = null, baseStats = null; // quad source mesh + BVH of the original surface
 let result = null; // { mesh, uv, materials } when the polygon path is used (quad mode or auto UV)
@@ -62,6 +62,15 @@ const checker = (() => {
   return t;
 })();
 const checkerMat = new THREE.MeshStandardMaterial({ map: checker, roughness: 0.8, side: THREE.DoubleSide });
+// stripe preview: horizontal bands show at a glance whether stripes run level and meet at seams
+const stripes = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 1024;
+  const g = c.getContext('2d');
+  for (let y = 0; y < 1024; y += 32) { g.fillStyle = '#ec78aa'; g.fillRect(0, y, 1024, 16); g.fillStyle = '#141416'; g.fillRect(0, y + 16, 1024, 16); g.fillStyle = '#f2f2f2'; g.fillRect(0, y + 14, 1024, 2); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+})();
+const stripeMat = new THREE.MeshStandardMaterial({ map: stripes, roughness: 0.85, side: THREE.DoubleSide });
 
 function disposeGroup(group) { group.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); group.clear(); }
 
@@ -90,6 +99,7 @@ function buildPolyGroup(group, r) {
     const g = polyToGeometry(sub, uv ? { ...uv, corner: fis.map((fi) => uv.corner[fi]) } : null);
     let mat;
     if (state.look === 'checker' && uv) mat = checkerMat;
+    else if (state.look === 'stripes' && uv) mat = stripeMat;
     else { mat = (materials[k] || greyMat).clone(); mat.side = THREE.DoubleSide; mat.vertexColors = false; if (uv || state.topo === 'quads') { mat.map = null; mat.normalMap = null; } mat.needsUpdate = true; }
     group.add(new THREE.Mesh(g, mat));
   }
@@ -249,11 +259,13 @@ async function loadFiles(list) {
     // polygon version of the source: native OBJ faces, or quads rebuilt from triangles
     base = objText ? polyFromOBJ(objText) : polyFromParts(parts, { pairQuads: true });
     baseStats = faceStats(base);
-    const quadShare = baseStats.quads / Math.max(1, baseStats.faces);
-    setTopo(quadShare >= 0.7 ? 'quads' : 'tris', false);
+    const quadShare = baseStats.quads / Math.max(1, baseStats.faces), grid = gridScore(base);
+    const isGrid = quadShare >= 0.7 && grid >= 0.6;
+    setTopo(isGrid ? 'quads' : 'tris', false);
     const textured = parts.some((p) => p.material?.map);
-    state.autoUV = !textured; $('#autoUV').checked = state.autoUV;
-    $('#detected').textContent = `Detected ${Math.round(quadShare * 100)}% quads → ${quadShare >= 0.7 ? 'Quads' : 'Triangles'} mode.${textured ? ' Auto UV is off because this model has textures; turning it on replaces its UVs.' : ''}`;
+    state.autoUV = !textured; $('#autoUV').checked = state.autoUV; document.body.classList.toggle('autouv', state.autoUV);
+for (const id of ['upright', 'level', 'regularize']) $(`#${id}`).checked = state[id];
+    $('#detected').textContent = `${isGrid ? `Clean quad grid (${Math.round(quadShare * 100)}% quads)` : quadShare >= 0.7 ? `Quads, but no regular grid (${Math.round(grid * 100)}% grid)` : `Triangle mesh (${Math.round(quadShare * 100)}% quads)`} → ${isGrid ? 'Quads' : 'Triangles'} mode.${textured ? ' Auto UV is off because this model has textures; turning it on replaces its UVs.' : ''}`;
     buildOrig();
     frame(origGroup);
     $('#name').value = `${baseName}_lowpoly`;
@@ -296,7 +308,7 @@ async function run() {
       const mesh = state.ratio >= 0.999 ? base : reduceQuads(base, target, { surface });
       tReduce = performance.now() - t0;
       let uv = null;
-      if (state.autoUV) { status('Unwrapping UVs…'); await nextFrame(); t0 = performance.now(); uv = unwrap(mesh); tUV = performance.now() - t0; }
+      if (state.autoUV) { status('Unwrapping UVs…'); await nextFrame(); t0 = performance.now(); uv = unwrap(mesh, uvOpts()); tUV = performance.now() - t0; }
       result = { mesh, uv, materials: materialsFor(mesh.matNames || []) };
       simplified = null;
       buildPolyGroup(simpGroup, result);
@@ -309,7 +321,8 @@ async function run() {
       if (state.autoUV) {
         status('Unwrapping UVs…'); await nextFrame(); t0 = performance.now();
         const mesh = polyFromParts(simplified, { pairQuads: false });
-        result = { mesh, uv: unwrap(mesh), materials: simplified.map((p) => p.material) };
+        if (state.islands === 'panels') { if (!surface) surface = makeSurface(base); panelsFrom(mesh, base, surface); }
+        result = { mesh, uv: unwrap(mesh, uvOpts()), materials: simplified.map((p) => p.material) };
         tUV = performance.now() - t0;
         buildPolyGroup(simpGroup, result);
       } else { result = null; buildTriGroup(simpGroup, simplified); }
@@ -323,7 +336,7 @@ async function run() {
     $('#lbl-low').textContent = `Low poly · ${fmt(faces)} ${unit}`;
     drawUV();
     let msg = `${baseName} · ${fmt(total)} → ${fmt(faces)} ${state.topo === 'quads' ? `faces (${quadPct} quads)` : 'triangles'} in ${ms(tReduce)}`;
-    if (result?.uv) msg += ` · UVs: ${result.uv.islands} islands, ${Math.round(coverage(result.mesh, result.uv) * 100)}% of the square, ${ms(tUV)}`;
+    if (result?.uv) msg += ` · UVs: ${result.uv.islands} island${result.uv.islands === 1 ? '' : 's'}${state.level && state.upright ? `, ${result.uv.levelled} level` : ''}, ${Math.round(coverage(result.mesh, result.uv) * 100)}% of the square, ${ms(tUV)}`;
     if (state.topo === 'tris' && faces > Math.ceil(total * state.ratio) * 1.15 + 12) msg += ` · stopped early to keep ${state.lockBorder ? 'protected open edges' : 'UV seams / hard edges'}${state.mergeSeams ? '' : ' — try “Allow collapsing across UV seams”'}`;
     status(msg);
   } catch (e) {
@@ -332,6 +345,8 @@ async function run() {
   running = false;
   if (queued) { queued = false; run(); }
 }
+
+const uvOpts = () => ({ mode: state.islands, upright: state.upright, alignHeight: state.upright && state.level, level: state.upright && state.level });
 
 /* ---------------- UV layout ---------------- */
 
@@ -428,7 +443,12 @@ $('#ratio').addEventListener('input', (e) => {
 $('#target').addEventListener('change', (e) => parts && setRatio(+e.target.value / sourceFaces()));
 document.querySelectorAll('[data-pct]').forEach((b) => (b.onclick = () => setRatio(+b.dataset.pct / 100)));
 document.querySelectorAll('[data-topo]').forEach((b) => (b.onclick = () => setTopo(b.dataset.topo)));
-for (const id of ['lockBorder', 'prune', 'shading', 'mergeSeams', 'autoUV']) $(`#${id}`).onchange = (e) => { state[id] = e.target.checked; run(); };
+for (const id of ['lockBorder', 'prune', 'shading', 'mergeSeams', 'autoUV', 'upright', 'level', 'regularize']) $(`#${id}`).onchange = (e) => { state[id] = e.target.checked; document.body.classList.toggle('autouv', state.autoUV); run(); };
+document.querySelectorAll('[data-islands]').forEach((b) => (b.onclick = () => {
+  state.islands = b.dataset.islands;
+  document.querySelectorAll('[data-islands]').forEach((x) => x.classList.toggle('on', x === b));
+  run();
+}));
 document.querySelectorAll('[data-look]').forEach((b) => (b.onclick = () => {
   state.look = b.dataset.look;
   document.querySelectorAll('[data-look]').forEach((x) => x.classList.toggle('on', x === b));
@@ -453,7 +473,8 @@ window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.c
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
 window.addEventListener('drop', (e) => { e.preventDefault(); document.body.classList.remove('drag'); if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
 
-$('#autoUV').checked = state.autoUV;
+$('#autoUV').checked = state.autoUV; document.body.classList.toggle('autouv', state.autoUV);
+for (const id of ['upright', 'level', 'regularize']) $(`#${id}`).checked = state[id];
 setTopo(state.topo, false);
 setRatio(state.ratio, false);
 resize();
