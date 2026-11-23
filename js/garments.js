@@ -326,17 +326,22 @@ export function buildPants(body, m, crop, o = {}) {
   // (Waistbands are often elastic and read narrow, which would shrink everything.)
   const hipY = body.crotchY + 0.09 * body.scale;
   const s = (body.section(hipY).perim / 2 / (m.hipW || m.waistW)) * size;
-  const waistY = body.crotchY + m.rise * s * (o.riseScale ?? 1);
-  // hem: from the photo, or down to the floor if the photo cuts the legs off
+  const D = o.desc || {}, fit = FIT[D.fit] || FIT.none;
+  // rise: the description wins over the photo
+  const rise = D.rise ? RISE[D.rise] * body.scale : m.rise * s;
+  const waistY = body.crotchY + rise * (o.riseScale ?? 1);
+  // hem: description length, else the photo (down to the floor if the photo cuts the legs off)
   const floorHem = body.groundY + 0.015, photoHem = body.crotchY - m.inseam * s;
-  const hemY = Math.max(floorHem, body.crotchY - (m.cropped ? Math.max(m.inseam * s, body.crotchY - floorHem) : m.inseam * s) * (o.lengthScale ?? 1));
+  const target = D.length && pantsHem(body, D.length);
+  const inseam = target != null ? body.crotchY - target : m.cropped ? Math.max(m.inseam * s, body.crotchY - floorHem) : m.inseam * s;
+  const hemY = Math.max(floorHem, body.crotchY - inseam * (o.lengthScale ?? 1));
   const tMax = (body.crotchY - hemY) / Math.max(1e-6, body.crotchY - photoHem); // > 1 where the leg continues past the photo
 
   // pelvis rings: ellipses around the hips, perimeter from the photo (flat width = half the circumference)
   const pelvis = [];
   for (let i = 0; i < PR; i++) {
     const t = i / (PR - 1), y = waistY + (body.crotchY - waistY) * t, sec = body.section(y);
-    const want = Math.max(2 * m.pelvisWidth(t) * s, sec.perim * (1 + ease * 3));
+    const want = Math.max(2 * m.pelvisWidth(t) * s * fit.hips, sec.perim * (1 + ease * 3));
     const k = want / ellipsePerim(sec.a, sec.b);
     const span = m.pelvisSpan(t), ring = [];
     for (let j = 0; j < 2 * M; j++) {
@@ -367,7 +372,10 @@ export function buildPants(body, m, crop, o = {}) {
     const rings = [loop];
     for (let i = 1; i <= N; i++) {
       const t = i / N, y = body.crotchY + (hemY - body.crotchY) * t, c = body.legAt(side, y), tp = t * tMax;
-      const rProfile = Math.max((2 * m.legWidth(tp) * s) / (2 * Math.PI), body.legR(y) * 1.04 + 0.004);
+      const rFloor = body.legR(y) * 1.04 + 0.004;
+      // leg shape from the description (flare, bootcut, wide, straight, skinny, joggers), else from the photo
+      const rShape = D.leg ? legShape(body, D.leg, y, rFloor) : (2 * m.legWidth(tp) * s) / (2 * Math.PI);
+      const rProfile = Math.max(rShape * fit.legs, rFloor);
       const e = Math.min(1, t / 0.2), ease2 = e * e * (3 - 2 * e); // smoothstep over the top fifth of the leg
       const r = Math.max(rProfile, rTop + (rProfile - rTop) * ease2);
       const w = Math.min(1, i / 8), span = m.legSpan(side, tp), ring = [];
@@ -393,9 +401,12 @@ export function buildPants(body, m, crop, o = {}) {
 
 export function buildSkirt(body, m, crop, o = {}) {
   const size = o.size ?? 1, M = 2 * Math.round((o.density ?? 1) * 10), R = Math.round((o.density ?? 1) * 22), uv = uvOf(crop), B = new Builder();
-  const waistY = body.hips.y + 0.03 * body.scale * (o.riseScale ?? 1);
+  const D = o.desc || {}, fit = FIT[D.fit] || FIT.none;
+  const waistY = body.hips.y + ({ low: -0.03, mid: 0.03, high: 0.09 }[D.rise] ?? 0.03) * body.scale * (o.riseScale ?? 1);
   const s = (body.section(waistY).perim / 2 / m.waistW) * size;
-  const len = m.length * s * (o.lengthScale ?? 1), rings = [];
+  const target = D.length && skirtHem(body, D.length);
+  const len = (target != null ? waistY - target : m.length * s) * (o.lengthScale ?? 1), rings = [];
+  let hipPerim = 0;
   for (let i = 0; i < R; i++) {
     const t = i / (R - 1), y = Math.max(body.groundY + 0.01, waistY - len * t);
     let sec = body.section(Math.max(y, body.crotchY + 0.02));
@@ -404,7 +415,10 @@ export function buildSkirt(body, m, crop, o = {}) {
       sec = { cx: (L.x + Rr.x) / 2, cz: (L.z + Rr.z) / 2, a: Math.max(sec.a, (L.x - Rr.x) / 2 + r), b: Math.max(sec.b * 0.9, r), perim: 0 };
       sec.perim = ellipsePerim(sec.a, sec.b);
     }
-    const want = Math.max(2 * m.width(t) * s, sec.perim * 1.02), k = want / ellipsePerim(sec.a, sec.b), span = m.span(t), ring = [];
+    if (y > body.crotchY) hipPerim = Math.max(hipPerim, sec.perim);
+    // silhouette from the description (pencil / A-line / full), else from the photo
+    const shaped = D.skirt ? Math.max(hipPerim, sec.perim) * 1.03 * ({ pencil: 1, aline: 1 + 0.8 * t, full: 1 + 1.4 * t * (2 - t) }[D.skirt]) : 2 * m.width(t) * s;
+    const want = Math.max(shaped * fit.hips, sec.perim * 1.02), k = want / ellipsePerim(sec.a, sec.b), span = m.span(t), ring = [];
     for (let j = 0; j < 2 * M; j++) {
       const phi = (2 * Math.PI * j) / (2 * M), jj = j / M;
       const sx = jj <= 0.5 || jj >= 1.5 ? (jj >= 1.5 ? jj - 1.5 : jj + 0.5) : 1.5 - jj;
@@ -421,7 +435,10 @@ export function buildTop(body, m, crop, o = {}) {
   const size = o.size ?? 1, d = o.density ?? 1, M = 2 * Math.round(d * 10), uv = uvOf(crop), B = new Builder();
   const chestY = body.arm.L.y - 0.12, shoulderY = body.arm.L.y + 0.035, neckY = body.neck.y + 0.01;
   const s = (body.section(chestY, 0.2).perim / 2 / m.torsoW) * size * 1.04;
-  const hemY = Math.max(body.crotchY - 0.05, shoulderY - m.length * s * (o.lengthScale ?? 1));
+  const D = o.desc || {}, fit = FIT[D.fit] || FIT.none;
+  const topHem = { crop: body.hips.y + 0.03 * body.scale, long: body.crotchY - 0.06 * body.scale }[D.topLen];
+  const photoLen = m.length * s, descLen = topHem != null ? shoulderY - topHem : photoLen;
+  const hemY = Math.max(body.crotchY - 0.12, shoulderY - (D.topLen === 'long' ? Math.max(photoLen, descLen) : descLen) * (o.lengthScale ?? 1));
   const NR = Math.max(6, Math.round(d * 16)), rings = [];
   const shoulderHalf = Math.abs(body.arm.L.x - body.hips.x) + 0.02;
   // torso: hem → armpit (photo widths), armpit → shoulder (flattening toward the shoulder line), then the neck opening
@@ -434,7 +451,7 @@ export function buildTop(body, m, crop, o = {}) {
     let cx = chest.cx, cz = chest.cz, a, b;
     if (L.kind === 'torso') {
       const sec = body.section(L.y, 0.2), tImg = 1 - (L.y - hemY) / Math.max(1e-6, shoulderY - hemY);
-      const want = Math.max(2 * m.width(Math.min(0.98, Math.max(0.3, tImg))) * s, sec.perim * 1.04);
+      const want = Math.max(2 * m.width(Math.min(0.98, Math.max(0.3, tImg))) * s * fit.hips, sec.perim * 1.04);
       const k = want / ellipsePerim(sec.a, sec.b); a = sec.a * k; b = sec.b * k; cx = sec.cx; cz = sec.cz;
     } else if (L.kind === 'shoulder') { a = chest.a * 1.08 + (shoulderHalf - chest.a * 1.08) * L.t; b = chest.b * 1.1 * (1 - 0.45 * L.t); }
     else { a = 0.065 * body.scale; b = 0.06 * body.scale; }
@@ -453,7 +470,7 @@ export function buildTop(body, m, crop, o = {}) {
   const groups = [{ faces: torsoFaces, axis: (y) => new THREE.Vector3(chest.cx, y, chest.cz) }];
   // sleeve length as a share of the arm: the photo's sleeve reach past the torso, in metres, over shoulder → wrist
   const armLen = body.hand.L.distanceTo(body.arm.L);
-  const reach = o.sleeve ?? Math.min(1, (m.sleeveReach * s) / armLen + 0.08);
+  const reach = o.sleeve ?? (D.sleeve ? SLEEVE[D.sleeve] : Math.min(1, (m.sleeveReach * s) / armLen + 0.08));
   if (reach > 0.05) for (const side of ['L', 'R']) {
     const a0 = body.arm[side], hand = body.hand[side], dirX = Math.sign(a0.x - body.hips.x);
     const start = new THREE.Vector3(body.hips.x + dirX * (shoulderHalf - 0.05), a0.y, a0.z), end = start.clone().lerp(hand, reach);
@@ -461,7 +478,7 @@ export function buildTop(body, m, crop, o = {}) {
     const thick = (m.sleeveThick || m.torsoW * 0.35) * s; // flat-lay sleeve height = half circumference
     for (let i = 0; i <= S; i++) {
       const t = i / S, c = start.clone().lerp(end, t), along = (c.x - body.arm[side].x) / (hand.x - body.arm[side].x);
-      const r = Math.max(thick * (1 - 0.25 * t) / Math.PI, body.armR(Math.max(0, along)) * 1.08 + 0.004), ring = [];
+      const r = Math.max(thick * (1 - 0.25 * t) / Math.PI * fit.legs, body.armR(Math.max(0, along)) * 1.08 + 0.004), ring = [];
       const sp = m.sleeveSpan(side, t);
       for (let j = 0; j < n; j++) {
         const a = (2 * Math.PI * j) / n, p = new THREE.Vector3(c.x, c.y + r * Math.cos(a), c.z + r * Math.sin(a));
@@ -481,6 +498,38 @@ export function buildTop(body, m, crop, o = {}) {
     if (sgn < 0) for (const fi of g.faces) B.F[fi].reverse();
   }
   return finishMesh(B, { hemY, scale: s });
+}
+
+/* ---------- description presets ---------- */
+
+const FIT = { none: { hips: 1, legs: 1 }, tight: { hips: 1, legs: 0.97 }, fitted: { hips: 1, legs: 1 }, relaxed: { hips: 1.06, legs: 1.18 }, baggy: { hips: 1.12, legs: 1.38 } };
+const RISE = { low: 0.13, mid: 0.18, high: 0.25 }; // crotch → waistband, metres on a 1.66 m body
+const SLEEVE = { none: 0, cap: 0.1, short: 0.28, elbow: 0.5, threequarter: 0.72, long: 1 };
+
+function pantsHem(body, len) {
+  const ankle = body.ft.L.y, knee = body.kn.L.y;
+  return { microshorts: body.crotchY - 0.035 * body.scale, shorts: body.crotchY - 0.12 * body.scale, knee: knee - 0.02, calf: (knee + ankle) / 2,
+    ankle: ankle + 0.05 * body.scale, full: body.groundY + 0.03, floor: body.groundY + 0.012 }[len] ?? null;
+}
+function skirtHem(body, len) {
+  const ankle = body.ft.L.y, knee = body.kn.L.y;
+  return { micro: body.crotchY - 0.02, mini: body.crotchY - 0.1 * body.scale, shorts: body.crotchY - 0.1 * body.scale, knee: knee, calf: (knee + ankle) / 2 - 0.02,
+    midi: (knee + ankle) / 2 - 0.02, ankle: ankle + 0.04, maxi: body.groundY + 0.04, full: body.groundY + 0.04, floor: body.groundY + 0.015 }[len] ?? null;
+}
+// leg radius for a named cut, from the anatomical leg (rFloor = leg + ease at this height)
+function legShape(body, cut, y, rFloor) {
+  const knee = body.kn.L.y, u = (body.crotchY - y) / (body.crotchY - body.ft.L.y); // 0 crotch → 1 ankle
+  const rAt = (yy) => body.legR(yy) * 1.04 + 0.004, sm = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+  const rKnee = rAt(knee), rThigh = rAt(body.crotchY), rMid = rAt(body.crotchY - 0.25 * (body.crotchY - body.ft.L.y));
+  switch (cut) {
+    case 'skinny': return rFloor;
+    case 'straight': return Math.max(rFloor, rMid);
+    case 'bootcut': return Math.max(rFloor, rKnee * (1 + 0.4 * sm((u - 0.5) / 0.5)));
+    case 'flare': return Math.max(rFloor, rKnee * (1 + 1.15 * sm((u - 0.42) / 0.6)));
+    case 'wide': return Math.max(rFloor, rThigh * 1.12);
+    case 'tapered': return u > 0.93 ? rAt(body.ft.L.y) * 1.02 : Math.max(rFloor * 1.12, rFloor + (rAt(body.ft.L.y) - rFloor) * sm((u - 0.6) / 0.33));
+    default: return rFloor;
+  }
 }
 
 const range = (a, b) => Array.from({ length: b - a }, (_, i) => a + i);

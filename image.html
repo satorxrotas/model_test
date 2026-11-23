@@ -48,7 +48,11 @@
   tr.hi td { color: var(--accent); }
   input[type=range] { width: 100%; accent-color: var(--accent); }
   input[type=number], input[type=text] { width: 100%; font: 12px 'JetBrains Mono', monospace; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
-  input[type=number]:focus, input[type=text]:focus { border-color: var(--accent); }
+  input[type=number]:focus, input[type=text]:focus, textarea:focus { border-color: var(--accent); }
+  textarea { width: 100%; min-height: 64px; resize: vertical; font: 12.5px/1.45 'Inter Tight', sans-serif; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
+  #understood .chip { cursor: default; padding: 3px 9px; font-size: 11px; }
+  #suggest .chip { padding: 3px 9px; font-size: 11px; }
+  #suggest .chip::before { content: '+ '; opacity: .6; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
   .chip, .seg button { font: 12px 'JetBrains Mono', monospace; color: var(--mute); background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
   .chip.on, .seg button.on { color: #111; background: var(--accent); border-color: var(--accent); }
@@ -128,6 +132,14 @@
       <p class="hint">Front view, garment laid out straight. Transparent PNGs skip the cut-out.</p>
       <label class="row needs-model"><span>Background tolerance</span><span class="val" id="tolerance-v"></span></label>
       <input class="needs-model" type="range" id="tolerance" min="0.5" max="2" step="0.05">
+    </section>
+
+    <section class="needs-model">
+      <h2>Describe it <span style="text-transform:none;letter-spacing:0;font-weight:400;opacity:.7">(optional)</span></h2>
+      <textarea id="describe" spellcheck="false" placeholder="e.g. high-rise flared pants, fitted through the thigh, floor length"></textarea>
+      <div class="chips" id="understood"></div>
+      <p class="hint">Anything you describe overrides what was measured from the photo — type, rise, leg shape, fit, length, sleeves. Tap to add:</p>
+      <div class="chips" id="suggest"></div>
     </section>
 
     <section class="needs-model">

@@ -32,7 +32,8 @@ Third tab. Upload a garment photo (flat lay or product shot); no AI service need
 1. **Cut-out**: background colours are clustered from the photo's border (the garment may touch the frame); each cluster is tried as the background in a chroma-weighted colour space and the most central, least frame-touching result wins. Transparent PNGs use their alpha. *Background tolerance* adjusts it.
 2. **Measure**: garment type guessed from the silhouette (pants / skirt / top). Pants: waistband, hips, crotch, each leg's width down to the hem (legs cross-checked for symmetry so anything touching the garment is ignored); hems cut off by the photo continue to the floor with the texture mirrored.
 3. **Build**: clean quad garment on the Motion Studio body (T-pose, metres, +Z front), sized from the hips (flat width = half circumference), legs never narrower than a standard female leg. Pants have a proper crotch (shared seam between the legs); skirts clear both legs; tops get a torso and sleeves along the arms. The photo is wrapped on (front and back mirrored, no UV seams).
-4. **Output**: *Send to Motion Studio* (IndexedDB hand-off; the studio skips its auto-placement for pre-fitted garments), *Rigged .glb* (Mixamo skeleton, skin weights from the body, texture embedded) or *OBJ (.zip)* with texture.
+4. **Describe it** (optional, `js/describe.js`): type a description such as *"high-rise flared pants, fitted, floor length"* and the words override what was measured from the photo — garment type, rise (low / mid / high), leg cut (flared, bootcut, wide, straight, skinny, joggers), fit (tight → baggy), length (shorts → floor; mini / midi / maxi), skirt shape (pencil, A-line, flowy), top length (cropped, longline) and sleeves (sleeveless → long). Recognised terms show as chips; suggestion chips add terms with a tap. Keyword based, no AI service.
+5. **Output**: *Send to Motion Studio* (IndexedDB hand-off; the studio skips its auto-placement for pre-fitted garments), *Rigged .glb* (Mixamo skeleton, skin weights from the body, texture embedded) or *OBJ (.zip)* with texture.
 
 ## Files
 - `index.html` – UI
@@ -43,7 +44,7 @@ Third tab. Upload a garment photo (flat lay or product shot); no AI service need
 - `assets/rigs/` – body (`Michelle.glb`) and motion library (`Xbot.glb`), Mixamo rigs from the three.js examples
 - `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simplify (loading, simplification, OBJ/MTL writers)
 - `js/quadmesh.js` – quad-preserving reduction; `js/uvunwrap.js` – automatic UV unwrap
-- `image.html`, `js/img2model.js`, `js/garments.js` – Image to Model; `js/handoff.js` – garment hand-off to Motion Studio
+- `image.html`, `js/img2model.js`, `js/garments.js`, `js/describe.js` – Image to Model; `js/handoff.js` – garment hand-off to Motion Studio
 - `vendor/three/` – three.js r170 (MIT)
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
 - `vendor/three-mesh-bvh/` – three-mesh-bvh 0.9.18 (MIT)

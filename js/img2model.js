@@ -7,11 +7,12 @@ import { bonesByName, snapshotPose, applyPose, sampleBody, fitGarment } from './
 import { exportRiggedGLB } from './exportrig.js';
 import { cutout, guessType, measurePants, measureTube, bodyInfo, buildPants, buildSkirt, buildTop, toGeometry, toOBJ, garmentTexture } from './garments.js';
 import { putGarment } from './handoff.js';
+import { parseDescription, SUGGESTIONS } from './describe.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (m) => { $('#status').textContent = m; };
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-const state = { type: 'pants', tolerance: 1, size: 1, length: 1, rise: 1, sleeve: -1, density: 1, showBody: true, wire: false, name: 'garment' };
+const state = { type: 'pants', tolerance: 1, size: 1, length: 1, rise: 1, sleeve: -1, density: 1, showBody: true, wire: false, name: 'garment', desc: {} };
 let character, bodyMesh, bones, restPose, body, srcCanvas, cut, meas, tex, garment, mesh, texture;
 
 /* ---------- 3D view ---------- */
@@ -60,7 +61,7 @@ async function processCut(guess) {
   const g = srcCanvas.getContext('2d'), data = g.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
   cut = cutout(data, { tolerance: state.tolerance });
   if (!cut.bbox) { status('Couldn\'t find a garment — try a plainer background or raise Background tolerance.'); drawPhoto(); return; }
-  if (guess) setType(guessType(cut), false);
+  if (guess) setType(state.desc.type || guessType(cut), false);
   document.body.classList.add('loaded');
   await build();
 }
@@ -75,7 +76,7 @@ async function build() {
   try {
     measure();
     tex = garmentTexture(srcCanvas, cut);
-    const o = { size: state.size, lengthScale: state.length, riseScale: state.rise, density: state.density, sleeve: state.sleeve >= 0 ? state.sleeve : undefined };
+    const o = { size: state.size, lengthScale: state.length, riseScale: state.rise, density: state.density, sleeve: state.sleeve >= 0 ? state.sleeve : undefined, desc: state.desc };
     garment = state.type === 'pants' ? buildPants(body, meas, tex.crop, o) : state.type === 'skirt' ? buildSkirt(body, meas, tex.crop, o) : buildTop(body, meas, tex.crop, o);
     if (texture) texture.dispose();
     texture = new THREE.CanvasTexture(tex.canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
@@ -89,7 +90,7 @@ async function build() {
     const cm = (v) => `${Math.round(v * 100)} cm`;
     const info = garment.info, quads = garment.faces.length;
     $('#facts').innerHTML = state.type === 'pants'
-      ? `<b>${quads.toLocaleString()} quads</b> · waist at ${cm(info.waistY)} · inseam ${cm(body.crotchY - info.hemY)}${meas.cropped ? ' · hems were cut off in the photo, so the legs run to the floor (adjust with Length)' : ''}`
+      ? `<b>${quads.toLocaleString()} quads</b> · waist at ${cm(info.waistY)} · inseam ${cm(body.crotchY - info.hemY)}${meas.cropped && !state.desc.length ? ' · hems were cut off in the photo, so the legs run to the floor (adjust with Length)' : ''}`
       : `<b>${quads.toLocaleString()} quads</b> · ${state.type === 'skirt' ? `length ${cm(info.waistY - info.hemY)}` : `hem at ${cm(info.hemY)}`}`;
     status(`${state.name}: ${state.type} built — ${quads.toLocaleString()} quads, rigged to the Motion Studio body.`);
   } catch (e) { console.error(e); status(`Couldn't build it: ${e.message}`); }
@@ -149,8 +150,30 @@ function setType(t, go = true) {
   state.type = t;
   document.querySelectorAll('[data-type]').forEach((b) => b.classList.toggle('on', b.dataset.type === t));
   document.body.dataset.type = t;
+  renderSuggestions();
   if (go) build();
 }
+
+/* ---------- description ---------- */
+function applyDescription(go = true) {
+  state.desc = parseDescription($('#describe').value);
+  $('#understood').innerHTML = state.desc.labels.map((l) => `<span class="chip on">${l}</span>`).join('');
+  if (state.desc.type && state.desc.type !== state.type) setType(state.desc.type, false);
+  renderSuggestions();
+  if (go) build();
+}
+function renderSuggestions() {
+  const have = $('#describe').value.toLowerCase();
+  const el = $('#suggest'); el.innerHTML = '';
+  for (const w of SUGGESTIONS[state.type] || []) {
+    if (have.includes(w)) continue;
+    const b = document.createElement('button'); b.className = 'chip'; b.textContent = w;
+    b.onclick = () => { const t = $('#describe'); t.value = t.value.trim() ? `${t.value.trim().replace(/[,.]$/, '')}, ${w}` : w; applyDescription(); };
+    el.appendChild(b);
+  }
+}
+let descDeb;
+$('#describe').addEventListener('input', () => { clearTimeout(descDeb); descDeb = setTimeout(() => applyDescription(), 450); });
 document.querySelectorAll('[data-type]').forEach((b) => (b.onclick = () => setType(b.dataset.type)));
 let deb;
 for (const [id, key, fmt] of [['size', 'size', (v) => `${Math.round(v * 100)}%`], ['length', 'length', (v) => `${Math.round(v * 100)}%`], ['rise', 'rise', (v) => `${Math.round(v * 100)}%`], ['sleeve', 'sleeve', (v) => (v < 0 ? 'auto' : `${Math.round(v * 100)}%`)], ['density', 'density', (v) => `${v.toFixed(2)}×`], ['tolerance', 'tolerance', (v) => `${v.toFixed(2)}×`]]) {
@@ -172,4 +195,4 @@ resize();
 loadBody().then(() => status('Drop a photo of a garment — a flat lay or product shot on a plain background works best.')).catch((e) => status(`Couldn't load the body: ${e.message}`));
 setType(state.type, false);
 
-window.__img = { loadImage, setType, build, exportOBJ, exportRig, state, get garment() { return garment; }, get meas() { return meas; }, get cut() { return cut; }, get body() { return body; } };
+window.__img = { loadImage, setType, build, describe: (t) => { $('#describe').value = t; applyDescription(); }, exportOBJ, exportRig, state, get garment() { return garment; }, get meas() { return meas; }, get cut() { return cut; }, get body() { return body; } };
