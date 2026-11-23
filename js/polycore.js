@@ -1,4 +1,4 @@
-// Poly Simply core: mesh extraction, welding, quadric simplification (meshoptimizer) and OBJ/MTL writing.
+// Poly Simplify core: mesh extraction, welding, quadric simplification (meshoptimizer) and OBJ/MTL writing.
 import * as THREE from 'three';
 import { MeshoptSimplifier } from '../vendor/meshoptimizer/meshopt_simplifier.module.js';
 
@@ -183,7 +183,7 @@ export function writeOBJ(parts, baseName) {
     }
     return textures.get(tex);
   };
-  const mtl = [`# Poly Simply · ${new Date().toISOString().slice(0, 10)}`, ''];
+  const mtl = [`# Poly Simplify · ${new Date().toISOString().slice(0, 10)}`, ''];
   for (const p of parts) {
     const m = p.material;
     if (matNames.has(m)) continue;
@@ -200,7 +200,7 @@ export function writeOBJ(parts, baseName) {
     if (kn) mtl.push(`map_Bump -bm 1.000000 ${kn}`);
     mtl.push('');
   }
-  const out = [`# Poly Simply · ${countTris(parts).toLocaleString('en-US')} triangles`, `mtllib ${baseName}.mtl`];
+  const out = [`# Poly Simplify · ${countTris(parts).toLocaleString('en-US')} triangles`, `mtllib ${baseName}.mtl`];
   let vo = 1, to = 1, no = 1;
   const objNames = new Set();
   for (const p of parts) {
@@ -259,12 +259,12 @@ export function writePolyOBJ(m, uv, materials, baseName) {
     while (taken.has(n)) n = `${safe(m.matNames?.[i], 'material')}_${k++}`;
     taken.add(n); names.set(i, n);
   }
-  const mtl = [`# Poly Simply · ${new Date().toISOString().slice(0, 10)}`, ''];
+  const mtl = [`# Poly Simplify · ${new Date().toISOString().slice(0, 10)}`, ''];
   for (const i of used) {
     const mat = materials?.[i], c = (mat?.color || new THREE.Color(0.74, 0.73, 0.7)).clone().convertLinearToSRGB();
     mtl.push(`newmtl ${names.get(i)}`, 'Ka 0.000000 0.000000 0.000000', `Kd ${f6(c.r)} ${f6(c.g)} ${f6(c.b)}`, 'Ks 0.100000 0.100000 0.100000', 'Ns 50.000000', `d ${f6(mat?.opacity ?? 1)}`, 'illum 2', '');
   }
-  const nV = m.pos.length / 3, out = [`# Poly Simply · ${m.faces.length.toLocaleString('en-US')} faces`, `mtllib ${baseName}.mtl`, `o ${safe(baseName, 'mesh')}`];
+  const nV = m.pos.length / 3, out = [`# Poly Simplify · ${m.faces.length.toLocaleString('en-US')} faces`, `mtllib ${baseName}.mtl`, `o ${safe(baseName, 'mesh')}`];
   const lines = new Array(nV);
   for (let i = 0; i < nV; i++) lines[i] = `v ${f6(m.pos[i * 3])} ${f6(m.pos[i * 3 + 1])} ${f6(m.pos[i * 3 + 2])}`;
   out.push(lines.join('\n'));

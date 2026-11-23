@@ -12,7 +12,7 @@ Drop in an un-rigged 3D garment, auto-fit it onto a rigged body, play realistic 
 
 Best results: garments modelled in an A- or T-pose, fitted (not floor-length/very loose). Keep the tab in front while recording.
 
-## Poly Simply (`poly.html`)
+## Poly Simplify (`poly.html`)
 Second tab. Upload a high-poly model (.glb/.gltf, .obj + .mtl + textures, .fbx, .stl, .ply, or a .zip of any of these), pick how much detail to keep (0.5–100%, or an exact triangle target), compare original vs low poly in a split view, and export OBJ.
 
 - Simplifier: meshoptimizer 1.3 quadric edge collapse (same family as Blender's Decimate › Collapse), shading- and UV-aware; per-part, so materials stay separate.
@@ -33,7 +33,7 @@ Second tab. Upload a high-poly model (.glb/.gltf, .obj + .mtl + textures, .fbx, 
 - `js/exportrig.js` – rigged .glb export
 - `js/poses.js` – procedural in-place model poses (two-bone IK)
 - `assets/rigs/` – body (`Michelle.glb`) and motion library (`Xbot.glb`), Mixamo rigs from the three.js examples
-- `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simply (loading, simplification, OBJ/MTL writers)
+- `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simplify (loading, simplification, OBJ/MTL writers)
 - `js/quadmesh.js` – quad-preserving reduction; `js/uvunwrap.js` – automatic UV unwrap
 - `vendor/three/` – three.js r170 (MIT)
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
