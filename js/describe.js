@@ -46,6 +46,8 @@ const RULES = [
   { re: /\b(short[- ]?sleeves?|tee|t-?shirt)\b/, set: { sleeve: 'short' }, label: 'Short sleeves' },
   { re: /\b(elbow[- ]?(length )?sleeves?|half[- ]?sleeves?)\b/, set: { sleeve: 'elbow' }, label: 'Elbow sleeves' },
   { re: /\b(3\/4|three[- ]?quarter)[- ]?sleeves?\b/, set: { sleeve: 'threequarter' }, label: '¾ sleeves' },
+  { re: /\b(hoodies?|hoody|hooded|hood)\b/, set: { hood: true }, label: 'Hood' },
+  { re: /\bno hood\b|\bhoodless\b/, set: { hood: false }, label: 'No hood' },
   { re: /\b(long[- ]?sleeves?|long[- ]?sleeved|hoodie|sweater|sweatshirt|jumper|cardigan)\b/, set: { sleeve: 'long' }, label: 'Long sleeves' },
 ];
 
@@ -74,5 +76,5 @@ const LENGTH_PRIORITY = { full: 1, floor: 2, ankle: 2, calf: 2, knee: 2, shorts:
 export const SUGGESTIONS = {
   pants: ['high rise', 'low rise', 'flared', 'bootcut', 'wide leg', 'straight leg', 'skinny', 'joggers', 'fitted', 'baggy', 'floor length', 'ankle length', 'shorts'],
   skirt: ['mini', 'midi', 'maxi', 'pencil', 'a-line', 'flowy', 'fitted', 'low rise', 'high waisted'],
-  top: ['crop top', 'longline', 'sleeveless', 'short sleeves', '3/4 sleeves', 'long sleeves', 'fitted', 'oversized'],
+  top: ['hoodie', 'crop top', 'longline', 'sleeveless', 'short sleeves', '3/4 sleeves', 'long sleeves', 'fitted', 'oversized'],
 };

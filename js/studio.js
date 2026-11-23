@@ -9,6 +9,7 @@ import { exportRiggedGLB } from './exportrig.js';
 import { POSES, bakePoses } from './poses.js';
 import { REF_MOTION } from './refmotion.js';
 import { getGarment } from './handoff.js';
+import { FIGURES, loadFigure, landmarks, morphGeometry } from './bodies.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -53,7 +54,7 @@ const state = {
   format: '9x16', motion: 'p_ref', camera: 'reference', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
-  partColors: {},
+  partColors: {}, figure: 'women',
 };
 
 /* ---------------- renderer / scene ---------------- */
@@ -121,24 +122,32 @@ function fabricMaterial(part, i) {
 /* ---------------- body + motions ---------------- */
 
 const gltfLoader = new GLTFLoader();
+let bodyMeshes = [], restPoses = {}, figureOf = '', figs = {}, marks = {};
 let character, bodyMesh, bones, restPose, bindPose, mixer, actions = {}, current = null, measure;
 let garment = null, garmentParts = null, garmentName = '', garmentSkeleton = null;
 
 const bodyMats = {
   mannequin: new THREE.MeshStandardMaterial({ color: '#cfc9c1', roughness: 0.55, metalness: 0 }),
+  joints: new THREE.MeshStandardMaterial({ color: '#57565a', roughness: 0.5, metalness: 0 }),
 };
 
-async function loadRigs() {
+async function loadRigs(id = state.figure) {
   status('Loading body + motion library…');
-  const [mich, xbot] = await Promise.all(['Michelle', 'Xbot'].map((n) => gltfLoader.loadAsync(`assets/rigs/${n}.glb`)));
-  character = mich.scene;
-  character.traverse((o) => { if (o.isSkinnedMesh) bodyMesh = o; });
-  bodyMesh.castShadow = true;
-  bodyMesh.frustumCulled = false;
+  figs = Object.fromEntries(await Promise.all(Object.keys(FIGURES).map(async (k) => [k, await loadFigure(gltfLoader, k)])));
+  // every rig back to its rest pose (one may have been animated or used as a motion source)
+  for (const [k, f] of Object.entries(figs)) { const b = bonesByName(f.scene); restPoses[k] ||= snapshotPose(b); applyPose(restPoses[k]); f.scene.updateMatrixWorld(true); marks[k] ||= landmarks(f); }
+  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(character); }
+  if (character) scene.remove(character);
+  actions = {}; current = null;
+  const me = figs[id] || figs.women;
+  state.figure = figureOf = me.id;
+  character = me.scene; bodyMesh = me.bodyMesh; bodyMeshes = me.meshes;
+  for (const m of bodyMeshes) { m.castShadow = true; m.frustumCulled = false; }
   scene.add(character);
   bones = bonesByName(character);
-  restPose = snapshotPose(bones);
+  restPose = restPoses[me.id];
   character.updateMatrixWorld(true);
+  const mich = figs.women.gltf, xbot = figs.men.gltf, own = me.gltf;
   const W = (n) => bones[n].getWorldPosition(new THREE.Vector3());
   const neck = W('Neck'), hips = W('Hips'), footY = (W('LeftFoot').y + W('RightFoot').y) / 2;
   measure = { neck, hips, footY, span: neck.y - footY, groundY: new THREE.Box3().setFromObject(character, true).min.y };
@@ -151,7 +160,9 @@ async function loadRigs() {
     const src = sources[m.src];
     const clip = src.animations.find((a) => a.name === m.clip);
     if (!clip) continue;
-    const baked = src === mich ? clip.clone() : retargetClip(src, clip);
+    let baked;
+    if (src === own) baked = clip.clone();
+    else { const sb = bonesByName(src.scene), rest = snapshotPose(sb); baked = retargetClip(src, clip); applyPose(rest); src.scene.updateMatrixWorld(true); }
     baked.name = m.id;
     actions[m.id] = mixer.clipAction(baked);
   }
@@ -221,9 +232,26 @@ function setBodyMode(mode) {
   const changed = state.body !== mode;
   state.body = mode;
   if (changed && garment) rebuildGarment();
-  bodyMesh.visible = mode !== 'invisible';
-  bodyMesh.material = bodyMats.mannequin;
-  bodyMesh.castShadow = mode === 'mannequin';
+  for (const m of bodyMeshes) { m.visible = mode !== 'invisible'; m.material = m === bodyMesh ? bodyMats.mannequin : bodyMats.joints; m.castShadow = mode === 'mannequin'; }
+}
+
+// switch between the women's and men's body; the garment is refitted onto the new one
+async function setFigure(id) {
+  if (id === figureOf) return;
+  const sel = $('#figure'); sel.disabled = true;
+  try {
+    await loadRigs(id);
+    setBodyMode(state.body);
+    // a garment built on the other body by Image to Model is re-shaped to this body's proportions
+    if (state.prefit && garmentParts && state.prefitFor && state.prefitFor !== figureOf) {
+      for (const p of garmentParts) morphGeometry(p.geometry, marks[state.prefitFor], marks[figureOf]);
+      state.prefitFor = figureOf;
+    }
+    $('#figure').value = figureOf;
+    if (garmentParts) rebuildGarment(); else setMotion(state.motion, 0);
+    if (state.camera === 'free') controls.target.set(measure.hips.x, measure.footY + measure.span * 0.62, measure.hips.z);
+  } catch (e) { console.error(e); status(`Couldn't switch body: ${e.message}`); }
+  finally { sel.disabled = false; }
 }
 
 /* ---------------- garment ---------------- */
@@ -291,7 +319,7 @@ async function exportRig() {
   const was = state.motion;
   try {
     mixer.stopAllAction(); current = null;
-    const blob = await exportRiggedGLB({ character, bodyMesh, garment, skeleton: garmentSkeleton, bindPose, applyPose, includeBody: $('#exportbody').checked, clips, name: base });
+    const blob = await exportRiggedGLB({ character, bodyMesh, bodyMeshes, garment, skeleton: garmentSkeleton, bindPose, applyPose, includeBody: $('#exportbody').checked, clips, name: base });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = `${base}_rigged.glb`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
@@ -449,6 +477,7 @@ function bindUI() {
   $('#camera').onchange = (e) => { state.camera = e.target.value; camT = 0; controls.enabled = state.camera === 'free'; if (controls.enabled) controls.target.set(measure.hips.x, measure.footY + measure.span * 0.62, measure.hips.z); };
   $('#format').onchange = (e) => { state.format = e.target.value; applyFormat(); };
   $('#body').value = state.body; $('#body').onchange = (e) => setBodyMode(e.target.value);
+  $('#figure').onchange = (e) => setFigure(e.target.value);
   $('#speed').oninput = (e) => { state.speed = +e.target.value; $('#speedv').textContent = `${state.speed.toFixed(2)}×`; };
   $('#camspeed').oninput = (e) => { state.camSpeed = +e.target.value; $('#camspeedv').textContent = `${state.camSpeed.toFixed(2)}×`; };
   $('#shadow').onchange = (e) => { floor.visible = e.target.checked; };
@@ -492,17 +521,19 @@ function bindUI() {
   applyFormat();
   requestAnimationFrame(frame);
   try {
-    await loadRigs();
+    // a garment sent from Image to Model: already built on its body, so it skips the auto-placement
+    const handoff = new URLSearchParams(location.search).get('garment') === 'handoff' ? await getGarment() : null;
+    if (handoff?.body && FIGURES[handoff.body]) state.figure = handoff.body;
+    $('#figure').value = state.figure;
+    await loadRigs(state.figure);
     setBodyMode(state.body);
     status('Loading garment…');
-    // a garment sent from Image to Model: already built on this body, so it skips the auto-placement
-    const handoff = new URLSearchParams(location.search).get('garment') === 'handoff' ? await getGarment() : null;
     if (handoff) {
       const obj = new OBJLoader().parse(handoff.obj);
       const img = new Image(); img.src = URL.createObjectURL(handoff.texture); await img.decode();
       const map = new THREE.Texture(img); map.colorSpace = THREE.SRGBColorSpace; map.needsUpdate = true;
       obj.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ name: handoff.name, map }); });
-      state.prefit = true;
+      state.prefit = true; state.prefitFor = state.figure;
       await loadGarmentFromObject(obj, handoff.name);
     } else {
       const text = await (await fetch('assets/garments/ladies-tracksuit.obj')).text();
@@ -513,4 +544,4 @@ function bindUI() {
 })();
 
 // test hooks
-window.__studio = { get camera() { return camera; }, get garment() { return garment; }, fitWith: (o) => fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: { ...state.fit, ...o } }), setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };
+window.__studio = { setFigure, get figure() { return figureOf; }, get camera() { return camera; }, get garment() { return garment; }, fitWith: (o) => fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts: { ...state.fit, ...o } }), setMotion, setBodyMode, state, rebuildGarment, get mixer() { return mixer; }, setCamera: (id) => { $('#camera').value = id; $('#camera').onchange({ target: { value: id } }); }, setFormat: (f) => { state.format = f; applyFormat(); }, step: (t) => { mixer.update(t); updateCamera(t); renderer.render(scene, camera); }, get camT() { return camT; }, set camT(v) { camT = v; } };

@@ -52,6 +52,13 @@
   textarea { width: 100%; min-height: 64px; resize: vertical; font: 12.5px/1.45 'Inter Tight', sans-serif; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
   #understood .chip { cursor: default; padding: 3px 9px; font-size: 11px; }
   #suggest .chip { padding: 3px 9px; font-size: 11px; }
+  .tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 10px; }
+  .tgrid button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px 7px; background: var(--field); border: 1px solid var(--line); border-radius: 9px; color: var(--mute); font: 11.5px 'Inter Tight', sans-serif; cursor: pointer; }
+  .tgrid button:hover { border-color: rgba(255,255,255,.25); color: var(--text); }
+  .tgrid button.on { background: var(--accent); border-color: var(--accent); color: #111; }
+  .colors { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .colors .sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255,255,255,.2); background: var(--c); cursor: pointer; padding: 0; }
+  .colors input[type=color] { width: 30px; height: 24px; border: 0; padding: 0; background: none; cursor: pointer; }
   #suggest .chip::before { content: '+ '; opacity: .6; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
   .chip, .seg button { font: 12px 'JetBrains Mono', monospace; color: var(--mute); background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
@@ -127,7 +134,18 @@
     <p class="sub">Garment photo in, rigged 3D garment out — sized to the Motion Studio body and wearing the photo as its texture.</p>
 
     <section>
-      <h2>Photo</h2>
+      <h2>Body</h2>
+      <div class="seg"><button data-figure="women" class="on">Women</button><button data-figure="men">Men</button></div>
+      <h2 style="margin-top:14px">Start from a template</h2>
+      <div class="tgrid" id="templates"></div>
+      <div class="colors"><span class="hint" style="margin:0 4px 0 0">Colour</span>
+        <button class="sw" data-color="#1f1f22" aria-label="Black"></button><button class="sw" data-color="#ecebe6" aria-label="White"></button><button class="sw" data-color="#9a9690" aria-label="Grey"></button><button class="sw" data-color="#3d5a80" aria-label="Denim"></button><button class="sw" data-color="#8a7f6a" aria-label="Khaki"></button><button class="sw" data-color="#3c4a3a" aria-label="Olive"></button><button class="sw" data-color="#7a2e2e" aria-label="Burgundy"></button><button class="sw" data-color="#e4b7c4" aria-label="Pink"></button>
+        <input type="color" id="tcolor" value="#3d5a80" aria-label="Custom colour"></div>
+      <p class="hint">Cut for the body you pick. Describe it below to change the fit, length or shape.</p>
+    </section>
+
+    <section>
+      <h2>Or a photo</h2>
       <label class="file"><input type="file" id="file" accept="image/*"><b>Upload a garment photo</b>Flat lay or product shot · plain background<br>or drop it anywhere</label>
       <p class="hint">Front view, garment laid out straight. Transparent PNGs skip the cut-out.</p>
       <label class="row needs-model"><span>Background tolerance</span><span class="val" id="tolerance-v"></span></label>

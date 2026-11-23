@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { sampleBody } from './autoskin.js';
 
-export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, bindPose, applyPose, includeBody, clips, name }) {
+export async function exportRiggedGLB({ character, bodyMesh, bodyMeshes, garment, skeleton, bindPose, applyPose, includeBody, clips, name }) {
   // 1. put the live rig into the bind (fit) pose and rebuild a clean skeleton:
   //    identity root, metres, no scale — the source rig's root rotation/scale is baked
   //    into the top bone so every DCC tool (Blender included) reads the same rest pose.
@@ -76,19 +76,25 @@ export async function exportRiggedGLB({ character, bodyMesh, garment, skeleton, 
 
   // 3. optional body, re-baked into the same fit pose so every mesh shares one bind pose
   if (includeBody) {
-    const s = sampleBody(bodyMesh);
-    const src = bodyMesh.geometry, g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(s.pos.slice(), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(s.nrm), 3));
-    if (src.attributes.uv) g.setAttribute('uv', src.attributes.uv.clone());
-    g.setAttribute('skinIndex', src.attributes.skinIndex.clone());
-    g.setAttribute('skinWeight', src.attributes.skinWeight.clone());
-    if (src.index) g.setIndex(src.index.clone());
-    const body = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial({ name: 'Body', color: '#cfc9c1', roughness: 0.6 }));
-    body.name = 'Body';
-    root.add(body);
-    body.updateMatrixWorld(true);
-    body.bind(skel, new THREE.Matrix4());
+    // every skinned piece of the figure (Xbot's joints are their own mesh); bone indices remapped by name
+    const index = new Map(src.map((b, i) => [b.name, i]));
+    for (const bm of bodyMeshes || [bodyMesh]) {
+      const s = sampleBody(bm), geo = bm.geometry, g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(s.pos.slice(), 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(s.nrm), 3));
+      if (geo.attributes.uv) g.setAttribute('uv', geo.attributes.uv.clone());
+      const si = geo.attributes.skinIndex.clone(), remap = bm.skeleton.bones.map((b) => index.get(b.name) ?? 0);
+      for (let i = 0; i < si.array.length; i++) si.array[i] = remap[si.array[i]] ?? 0;
+      g.setAttribute('skinIndex', si);
+      g.setAttribute('skinWeight', geo.attributes.skinWeight.clone());
+      if (geo.index) g.setIndex(geo.index.clone());
+      const nm = bm === bodyMesh ? 'Body' : `Body_${bm.name}`;
+      const body = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial({ name: nm, color: bm === bodyMesh ? '#cfc9c1' : '#4a4a4e', roughness: 0.6 }));
+      body.name = nm;
+      root.add(body);
+      body.updateMatrixWorld(true);
+      body.bind(skel, new THREE.Matrix4());
+    }
   }
 
   // 4. export

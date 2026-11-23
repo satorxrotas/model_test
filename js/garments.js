@@ -244,7 +244,7 @@ export function measureTube(cut, type) {
 
 // Landmarks + cross-sections of the Motion Studio body in its rest (T) pose.
 // Legs use standard female proportions (the body mesh wears wide trousers, so its legs can't be measured).
-export function bodyInfo(bones, bodyPos) {
+export function bodyInfo(bones, bodyPos, { sex = 'f' } = {}) {
   const W = (n) => bones[n].getWorldPosition(new THREE.Vector3());
   const hips = W('Hips'), ul = { L: W('LeftUpLeg'), R: W('RightUpLeg') }, kn = { L: W('LeftLeg'), R: W('RightLeg') }, ft = { L: W('LeftFoot'), R: W('RightFoot') };
   const arm = { L: W('LeftArm'), R: W('RightArm') }, fore = { L: W('LeftForeArm'), R: W('RightForeArm') }, hand = { L: W('LeftHand'), R: W('RightHand') };
@@ -267,14 +267,14 @@ export function bodyInfo(bones, bodyPos) {
     return new THREE.Vector3(f.x, y, f.z);
   };
   const scale = height / 1.66;
-  const legR = (y) => { // circumference profile of a female leg, crotch → ankle
+  const legR = (y) => { // circumference profile of a female / male leg, crotch → ankle
     const t = Math.max(0, Math.min(1, (crotchY - y) / (crotchY - ft.L.y)));
-    const C = [[0, 0.56], [0.25, 0.48], [0.5, 0.37], [0.7, 0.35], [0.88, 0.25], [1, 0.22]];
+    const C = sex === 'm' ? [[0, 0.57], [0.25, 0.5], [0.5, 0.39], [0.7, 0.38], [0.88, 0.26], [1, 0.24]] : [[0, 0.56], [0.25, 0.48], [0.5, 0.37], [0.7, 0.35], [0.88, 0.25], [1, 0.22]];
     let c = C[C.length - 1][1]; for (let i = 0; i + 1 < C.length; i++) if (t <= C[i + 1][0]) { c = C[i][1] + (C[i + 1][1] - C[i][1]) * (t - C[i][0]) / (C[i + 1][0] - C[i][0]); break; }
     return (c * scale) / (2 * Math.PI);
   };
-  const armR = (t) => (0.24 - 0.09 * t) * scale / (2 * Math.PI); // upper arm → wrist
-  return { hips, ul, kn, ft, arm, fore, hand, neck, crotchY, legLen, height, groundY: 0, section, legAt, legR, armR, scale };
+  const armR = (t) => (sex === 'm' ? 0.34 - 0.12 * t : 0.24 - 0.09 * t) * scale / (2 * Math.PI); // upper arm → wrist
+  return { sex, hips, ul, kn, ft, arm, fore, hand, neck, crotchY, legLen, height, groundY: 0, section, legAt, legR, armR, scale };
 }
 
 function hull2(pts) {
@@ -451,10 +451,12 @@ export function buildTop(body, m, crop, o = {}) {
     let cx = chest.cx, cz = chest.cz, a, b;
     if (L.kind === 'torso') {
       const sec = body.section(L.y, 0.2), tImg = 1 - (L.y - hemY) / Math.max(1e-6, shoulderY - hemY);
-      const want = Math.max(2 * m.width(Math.min(0.98, Math.max(0.3, tImg))) * s * fit.hips, sec.perim * 1.04);
+      // never wider than the torso band (rows near the armpit also cross the sleeves)
+      const wImg = Math.min(m.width(Math.min(0.98, Math.max(0.3, tImg))), (m.band[1] - m.band[0]) * 1.08);
+      const want = Math.max(2 * wImg * s * fit.hips, sec.perim * 1.04);
       const k = want / ellipsePerim(sec.a, sec.b); a = sec.a * k; b = sec.b * k; cx = sec.cx; cz = sec.cz;
     } else if (L.kind === 'shoulder') { a = chest.a * 1.08 + (shoulderHalf - chest.a * 1.08) * L.t; b = chest.b * 1.1 * (1 - 0.45 * L.t); }
-    else { a = 0.065 * body.scale; b = 0.06 * body.scale; }
+    else { const k = (body.sex === 'm' ? 1.12 : 1) * (D.hood ? 1.2 : 1); a = 0.065 * body.scale * k; b = 0.06 * body.scale * k; }
     const tImg = Math.min(1, Math.max(0, 1 - (L.y - hemY) / Math.max(1e-6, neckY - hemY))), span = m.span(tImg), ring = [];
     for (let j = 0; j < 2 * M; j++) {
       const phi = (2 * Math.PI * j) / (2 * M), jj = j / M;
@@ -468,6 +470,25 @@ export function buildTop(body, m, crop, o = {}) {
   const torsoFaces = range(0, B.F.length);
   // sleeves: tubes along the (horizontal, T-pose) arms, starting inside the shoulder
   const groups = [{ faces: torsoFaces, axis: (y) => new THREE.Vector3(chest.cx, y, chest.cz) }];
+  if (D.hood) {
+    // hood worn down: grows out of the neck seam, rises a little, folds back and drapes over the upper back
+    const neck = rings[rings.length - 1], a0 = 0.065 * body.scale * (body.sex === 'm' ? 1.12 : 1) * 1.2, b0 = a0 * 0.92, sc = body.scale;
+    const K = Math.max(5, Math.round(d * 8)), hood = [neck];
+    for (let k = 1; k <= K; k++) {
+      const t = k / K, ring = [], sp = m.span(0.32 + 0.16 * t), bw = m.band[1] - m.band[0];
+      for (let j = 0; j < 2 * M; j++) {
+        const phi = (2 * Math.PI * j) / (2 * M), c = Math.cos(phi), front = Math.max(0, c);
+        const ra = a0 * (1 + 0.75 * Math.sin((Math.PI * t) / 2)), rb = b0 * (1 + 0.9 * t);
+        const y = neckY + (0.05 * Math.sin(Math.PI * Math.min(1, t * 1.4)) - 0.11 * t * t) * sc - 0.07 * sc * t * Math.max(0, -c) + 0.02 * sc * t * front;
+        const z = chest.cz - 0.05 * sc * t + rb * c * (c > 0 ? 1 - 1.25 * t : 1 + 0.35 * t);
+        const jj = j / M, sx = jj <= 0.5 || jj >= 1.5 ? (jj >= 1.5 ? jj - 1.5 : jj + 0.5) : 1.5 - jj;
+        ring.push(B.v(new THREE.Vector3(chest.cx + ra * Math.sin(phi) * (1 - 0.15 * t * front), y, z), uv(m.band[0] + (0.2 + 0.6 * sx) * bw, sp[2])));
+      }
+      hood.push(ring);
+    }
+    const f0 = B.F.length; B.tube(hood);
+    groups.push({ faces: range(f0, B.F.length), axis: (y) => new THREE.Vector3(chest.cx, y, chest.cz - 0.03 * sc) });
+  }
   // sleeve length as a share of the arm: the photo's sleeve reach past the torso, in metres, over shoulder → wrist
   const armLen = body.hand.L.distanceTo(body.arm.L);
   const reach = o.sleeve ?? (D.sleeve ? SLEEVE[D.sleeve] : Math.min(1, (m.sleeveReach * s) / armLen + 0.08));
@@ -557,8 +578,11 @@ export function toOBJ(g, name) {
   const n = g.pos.length / 3;
   for (let i = 0; i < n; i++) L.push(`v ${f6(g.pos[i * 3])} ${f6(g.pos[i * 3 + 1])} ${f6(g.pos[i * 3 + 2])}`);
   for (let i = 0; i < n; i++) L.push(`vt ${f6(g.uv[i * 2])} ${f6(g.uv[i * 2 + 1])}`);
+  // smooth vertex normals (without them importers shade every quad flat)
+  const nr = toGeometry(g).attributes.normal.array;
+  for (let i = 0; i < n; i++) L.push(`vn ${nr[i * 3].toFixed(4)} ${nr[i * 3 + 1].toFixed(4)} ${nr[i * 3 + 2].toFixed(4)}`);
   L.push(`usemtl ${name}`, 's 1');
-  for (const f of g.faces) L.push('f ' + f.map((v) => `${v + 1}/${v + 1}`).join(' '));
+  for (const f of g.faces) L.push('f ' + f.map((v) => `${v + 1}/${v + 1}/${v + 1}`).join(' '));
   const mtl = [`newmtl ${name}`, 'Ka 0 0 0', 'Kd 1 1 1', 'Ks 0.05 0.05 0.05', 'Ns 20', 'd 1', 'illum 2', `map_Kd ${name}_texture.png`, ''].join('\n');
   return { obj: L.join('\n') + '\n', mtl };
 }

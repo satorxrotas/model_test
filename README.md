@@ -6,9 +6,10 @@ Drop in an un-rigged 3D garment, auto-fit it onto a rigged body, play realistic 
 1. **Load** an `.obj`, `.glb/.gltf` or `.fbx` garment (drag & drop or file picker). Each material becomes a part with its own colour.
 2. **Auto-fit** – the garment is scaled and placed on the body; arms and legs are posed to match the sleeves and hems; skin weights are copied from the nearest body surface, smoothed, and any part sitting inside the body is pushed out by the *Clearance* amount.
 3. **Animate** – *Reference sway* is motion measured from a reference clip (optical-flow tracking of the garment, `js/refmotion.js`). *Model poses* are in-place looping poses (weight shift, hip pop, hand on hip, hands on hips, slow twist, knee pop, hand in hair, lean back) with both feet locked to the floor by IK. *Movement* clips (idle, walk, run, dance, nods) are mocap retargeted onto the body. The garment follows either way.
-4. **Record** – pick 9:16, 4:5, 1:1 or 16:9, a camera move and a length, hit **Record** (or press `R`). Chrome saves H.264 MP4; other browsers may save WebM.
+4. **Body** – *Women's body* (Michelle) or *Men's body* (Xbot), under Look. All motions are retargeted to whichever is chosen.
+5. **Record** – pick 9:16, 4:5, 1:1 or 16:9, a camera move and a length, hit **Record** (or press `R`). Chrome saves H.264 MP4; other browsers may save WebM.
 
-5. **Rigged file** – *Download rigged .glb* exports a clean armature (metres, Y-up, identity root) with the skinned garment, optional body, and the motions as named actions. In Blender: File › Import › glTF 2.0. Rest pose = the garment's own modelled pose. Plain glTF 2.0 (no extensions), passes the Khronos validator with 0 errors/warnings; tested in Blender 4.2 and 5.0, built for 3.5+.
+6. **Rigged file** – *Download rigged .glb* exports a clean armature (metres, Y-up, identity root) with the skinned garment, optional body, and the motions as named actions. In Blender: File › Import › glTF 2.0. Rest pose = the garment's own modelled pose. Plain glTF 2.0 (no extensions), passes the Khronos validator with 0 errors/warnings; tested in Blender 4.2 and 5.0, built for 3.5+.
 
 Best results: garments modelled in an A- or T-pose, fitted (not floor-length/very loose). Keep the tab in front while recording.
 
@@ -29,11 +30,13 @@ Second tab. Upload a high-poly model (.glb/.gltf, .obj + .mtl + textures, .fbx, 
 ## Image to Model (`image.html`)
 Third tab. Upload a garment photo (flat lay or product shot); no AI service needed.
 
+**Body + templates**: pick *Women* (Michelle) or *Men* (Xbot) and start from a template (*Pants, Shorts, Skirt, T-shirt, Long sleeve, Hoodie*) or a photo. Templates are flat-lay drawings cut from the chosen body's own measurements (hips, waist, chest, leg and arm girth, landmarks), with fabric and construction details (waistband, fly, pockets, stitching, ribbing, kangaroo pocket, drawstrings) and a colour picker; they go through the same measure → build steps as a photo, so descriptions and sliders work on them. Hoodies get a hood (worn down). Men's cuts are straighter and roomier.
+
 1. **Cut-out**: background colours are clustered from the photo's border (the garment may touch the frame); each cluster is tried as the background in a chroma-weighted colour space and the most central, least frame-touching result wins. Transparent PNGs use their alpha. *Background tolerance* adjusts it.
 2. **Measure**: garment type guessed from the silhouette (pants / skirt / top). Pants: waistband, hips, crotch, each leg's width down to the hem (legs cross-checked for symmetry so anything touching the garment is ignored); hems cut off by the photo continue to the floor with the texture mirrored.
 3. **Build**: clean quad garment on the Motion Studio body (T-pose, metres, +Z front), sized from the hips (flat width = half circumference), legs never narrower than a standard female leg. Pants have a proper crotch (shared seam between the legs); skirts clear both legs; tops get a torso and sleeves along the arms. The photo is wrapped on (front and back mirrored, no UV seams).
 4. **Describe it** (optional, `js/describe.js`): type a description such as *"high-rise flared pants, fitted, floor length"* and the words override what was measured from the photo — garment type, rise (low / mid / high), leg cut (flared, bootcut, wide, straight, skinny, joggers), fit (tight → baggy), length (shorts → floor; mini / midi / maxi), skirt shape (pencil, A-line, flowy), top length (cropped, longline) and sleeves (sleeveless → long). Recognised terms show as chips; suggestion chips add terms with a tap. Keyword based, no AI service.
-5. **Output**: *Send to Motion Studio* (IndexedDB hand-off; the studio skips its auto-placement for pre-fitted garments), *Rigged .glb* (Mixamo skeleton, skin weights from the body, texture embedded) or *OBJ (.zip)* with texture.
+5. **Output**: *Send to Motion Studio* (IndexedDB hand-off; the studio opens on the same body and skips its auto-placement for pre-fitted garments; switching body there re-shapes the garment to the other body's proportions), *Rigged .glb* (Mixamo skeleton, skin weights from the body, texture embedded) or *OBJ (.zip)* with texture.
 
 ## Files
 - `index.html` – UI
@@ -44,7 +47,7 @@ Third tab. Upload a garment photo (flat lay or product shot); no AI service need
 - `assets/rigs/` – body (`Michelle.glb`) and motion library (`Xbot.glb`), Mixamo rigs from the three.js examples
 - `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simplify (loading, simplification, OBJ/MTL writers)
 - `js/quadmesh.js` – quad-preserving reduction; `js/uvunwrap.js` – automatic UV unwrap
-- `image.html`, `js/img2model.js`, `js/garments.js`, `js/describe.js` – Image to Model; `js/handoff.js` – garment hand-off to Motion Studio
+- `image.html`, `js/img2model.js`, `js/garments.js`, `js/describe.js`, `js/templates.js` – Image to Model; `js/bodies.js` – women's / men's body loading and garment re-shaping between them; `js/handoff.js` – garment hand-off to Motion Studio
 - `vendor/three/` – three.js r170 (MIT)
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
 - `vendor/three-mesh-bvh/` – three-mesh-bvh 0.9.18 (MIT)

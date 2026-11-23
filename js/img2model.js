@@ -8,11 +8,14 @@ import { exportRiggedGLB } from './exportrig.js';
 import { cutout, guessType, measurePants, measureTube, bodyInfo, buildPants, buildSkirt, buildTop, toGeometry, toOBJ, garmentTexture } from './garments.js';
 import { putGarment } from './handoff.js';
 import { parseDescription, SUGGESTIONS } from './describe.js';
+import { FIGURES, loadFigure } from './bodies.js';
+import { TEMPLATES, drawTemplate, templateIcon } from './templates.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (m) => { $('#status').textContent = m; };
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-const state = { type: 'pants', tolerance: 1, size: 1, length: 1, rise: 1, sleeve: -1, density: 1, showBody: true, wire: false, name: 'garment', desc: {} };
+const state = { type: 'pants', tolerance: 1, size: 1, length: 1, rise: 1, sleeve: -1, density: 1, showBody: true, wire: false, name: 'garment', desc: {}, figure: 'women', template: null, templateDesc: {}, color: null };
+let bodyMeshes = [], restPoses = {};
 let character, bodyMesh, bones, restPose, body, srcCanvas, cut, meas, tex, garment, mesh, texture;
 
 /* ---------- 3D view ---------- */
@@ -33,20 +36,29 @@ new ResizeObserver(resize).observe(canvas.parentElement);
 (function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
 
 /* ---------- body ---------- */
-async function loadBody() {
+const loader = new GLTFLoader();
+async function loadBody(id = state.figure) {
   status('Loading body…');
-  const g = await new GLTFLoader().loadAsync('assets/rigs/Michelle.glb');
-  character = g.scene; character.traverse((o) => { if (o.isSkinnedMesh) bodyMesh = o; });
-  bones = bonesByName(character); restPose = snapshotPose(bones);
+  const f = await loadFigure(loader, id);
+  if (character && character !== f.scene) scene.remove(character);
+  character = f.scene; bodyMesh = f.bodyMesh; bodyMeshes = f.meshes;
+  bones = bonesByName(character); restPose = restPoses[f.id] ||= snapshotPose(bones);
   applyPose(restPose); character.updateMatrixWorld(true);
-  body = bodyInfo(bones, sampleBody(bodyMesh).pos);
-  bodyMesh.material = bodyMat; bodyMesh.frustumCulled = false;
+  // measure every piece of the figure (Xbot's joints stick out past its surface)
+  const all = bodyMeshes.map((m) => sampleBody(m).pos), pos = new Float32Array(all.reduce((n, p) => n + p.length, 0));
+  all.reduce((o, p) => (pos.set(p, o), o + p.length), 0);
+  body = bodyInfo(bones, pos, { sex: f.figure.sex });
+  for (const m of bodyMeshes) { m.material = bodyMat; m.frustumCulled = false; }
+  character.visible = $('#showbody').checked;
   scene.add(character);
+  controls.target.set(0, body.height * 0.52, 0);
+  renderTemplates();
 }
 
 /* ---------- photo ---------- */
 async function loadImage(file) {
   status(`Reading ${file.name}…`);
+  state.template = null; state.templateDesc = {}; renderTemplates();
   state.name = file.name.replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_') || 'garment';
   const img = await createImageBitmap(file);
   const k = Math.min(1, 1200 / Math.max(img.width, img.height));
@@ -61,7 +73,7 @@ async function processCut(guess) {
   const g = srcCanvas.getContext('2d'), data = g.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
   cut = cutout(data, { tolerance: state.tolerance });
   if (!cut.bbox) { status('Couldn\'t find a garment — try a plainer background or raise Background tolerance.'); drawPhoto(); return; }
-  if (guess) setType(state.desc.type || guessType(cut), false);
+  if (guess) setType(state.desc.type || (state.template ? TEMPLATES[state.template].type : guessType(cut)), false);
   document.body.classList.add('loaded');
   await build();
 }
@@ -76,7 +88,7 @@ async function build() {
   try {
     measure();
     tex = garmentTexture(srcCanvas, cut);
-    const o = { size: state.size, lengthScale: state.length, riseScale: state.rise, density: state.density, sleeve: state.sleeve >= 0 ? state.sleeve : undefined, desc: state.desc };
+    const o = { size: state.size, lengthScale: state.length, riseScale: state.rise, density: state.density, sleeve: state.sleeve >= 0 ? state.sleeve : undefined, desc: { ...state.templateDesc, ...state.desc } };
     garment = state.type === 'pants' ? buildPants(body, meas, tex.crop, o) : state.type === 'skirt' ? buildSkirt(body, meas, tex.crop, o) : buildTop(body, meas, tex.crop, o);
     if (texture) texture.dispose();
     texture = new THREE.CanvasTexture(tex.canvas); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
@@ -132,7 +144,7 @@ async function exportRig() {
   const group = new THREE.Group();
   const sm = new THREE.SkinnedMesh(res.geometries[0], new THREE.MeshStandardMaterial({ name: n, map: texture, roughness: 0.85 }));
   sm.name = n; group.add(sm); sm.updateMatrixWorld(true); sm.bind(res.skeleton, new THREE.Matrix4());
-  const blob = await exportRiggedGLB({ character, bodyMesh, garment: group, skeleton: res.skeleton, bindPose: res.bindPose, applyPose, includeBody: $('#withbody').checked, clips: [], name: n });
+  const blob = await exportRiggedGLB({ character, bodyMesh, bodyMeshes, garment: group, skeleton: res.skeleton, bindPose: res.bindPose, applyPose, includeBody: $('#withbody').checked, clips: [], name: n });
   applyPose(restPose); character.updateMatrixWorld(true);
   download(blob, `${n}_rigged.glb`);
   status(`Saved ${n}_rigged.glb · ${(blob.size / 1e6).toFixed(1)} MB — armature + skinned garment (texture embedded). Blender: File › Import › glTF 2.0.`);
@@ -141,7 +153,7 @@ async function exportRig() {
 async function sendToStudio() {
   if (!garment) return;
   const n = fileName(), { obj } = toOBJ(garment, n);
-  await putGarment({ name: n, obj, texture: new Blob([await texturePNG()], { type: 'image/png' }), created: Date.now() });
+  await putGarment({ name: n, obj, texture: new Blob([await texturePNG()], { type: 'image/png' }), created: Date.now(), body: state.figure });
   location.href = 'index.html?garment=handoff';
 }
 
@@ -181,6 +193,38 @@ for (const [id, key, fmt] of [['size', 'size', (v) => `${Math.round(v * 100)}%`]
   el.value = state[key]; out.textContent = fmt(state[key]);
   el.oninput = () => { state[key] = +el.value; out.textContent = fmt(state[key]); clearTimeout(deb); deb = setTimeout(() => (key === 'tolerance' ? processCut(false) : build()), 220); };
 }
+/* ---------- body + templates ---------- */
+async function setFigure(id) {
+  if (!FIGURES[id]) return;
+  state.figure = id;
+  document.querySelectorAll('[data-figure]').forEach((b) => b.classList.toggle('on', b.dataset.figure === id));
+  renderTemplates();
+  await loadBody(id);
+  if (state.template) await useTemplate(state.template);
+  else if (cut?.bbox) await build();
+  else status(`${FIGURES[id].label}'s body loaded — pick a template or drop a photo.`);
+}
+async function useTemplate(kind) {
+  const T = TEMPLATES[kind]; if (!T || !body) return;
+  state.template = kind; state.templateDesc = { ...(T.desc || {}) };
+  srcCanvas = drawTemplate(kind, FIGURES[state.figure].sex, body, state.color || undefined);
+  state.name = `${state.figure}_${kind}`; $('#name').value = `${state.name}_3d`;
+  renderTemplates();
+  await processCut(true);
+}
+function renderTemplates() {
+  const sex = FIGURES[state.figure].sex, el = $('#templates');
+  el.innerHTML = Object.entries(TEMPLATES).map(([k, T]) => `<button data-template="${k}" class="${state.template === k ? 'on' : ''}">${(body ? templateIcon(k, sex, body, state.template === k ? '#111' : '#cfcac2') : '')}<span>${T.label}</span></button>`).join('');
+  el.querySelectorAll('[data-template]').forEach((b) => (b.onclick = () => useTemplate(b.dataset.template)));
+  const c = state.color || (state.template ? TEMPLATES[state.template].color[sex] : '#3d5a80');
+  $('#tcolor').value = c;
+}
+document.querySelectorAll('[data-figure]').forEach((b) => (b.onclick = () => setFigure(b.dataset.figure)));
+let colDeb;
+$('#tcolor').oninput = (e) => { state.color = e.target.value; clearTimeout(colDeb); if (state.template) colDeb = setTimeout(() => useTemplate(state.template), 250); };
+document.querySelectorAll('[data-color]').forEach((b) => { b.style.setProperty('--c', b.dataset.color); b.onclick = () => { $('#tcolor').value = b.dataset.color; $('#tcolor').oninput({ target: { value: b.dataset.color } }); }; });
+renderTemplates();
+
 $('#showbody').onchange = (e) => { if (character) character.visible = e.target.checked; };
 $('#wire').onchange = (e) => { state.wire = e.target.checked; mesh?.traverse((o) => { if (o.userData.wire) o.visible = state.wire; }); };
 $('#file').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) loadImage(f); };
@@ -192,7 +236,7 @@ $('#export-glb').onclick = exportRig;
 $('#send').onclick = sendToStudio;
 
 resize();
-loadBody().then(() => status('Drop a photo of a garment — a flat lay or product shot on a plain background works best.')).catch((e) => status(`Couldn't load the body: ${e.message}`));
+loadBody().then(() => status('Pick a template, or drop a photo of a garment — a flat lay or product shot on a plain background works best.')).catch((e) => status(`Couldn't load the body: ${e.message}`));
 setType(state.type, false);
 
-window.__img = { loadImage, setType, build, describe: (t) => { $('#describe').value = t; applyDescription(); }, exportOBJ, exportRig, state, get garment() { return garment; }, get meas() { return meas; }, get cut() { return cut; }, get body() { return body; } };
+window.__img = { loadImage, setType, setFigure, useTemplate, build, describe: (t) => { $('#describe').value = t; applyDescription(); }, exportOBJ, exportRig, state, get garment() { return garment; }, get meas() { return meas; }, get cut() { return cut; }, get body() { return body; } };
