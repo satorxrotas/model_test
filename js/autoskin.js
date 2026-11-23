@@ -204,7 +204,8 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
   if (!bb.isEmpty() && !gb.isEmpty()) tz = (bb.min.z + bb.max.z) / 2 - (gb.min.z + gb.max.z) / 2;
   tz += opts.depth; ty += opts.lift;
 
-  const M = new THREE.Matrix4().makeTranslation(tx, ty, tz).multiply(new THREE.Matrix4().makeScale(s, s, s));
+  // prefit: the garment was built on this body already (Image to Model) — keep it exactly where it is
+  const M = opts.prefit ? new THREE.Matrix4() : new THREE.Matrix4().makeTranslation(tx, ty, tz).multiply(new THREE.Matrix4().makeScale(s, s, s));
   const fitted = parts.map((p) => { const g = p.geometry.clone(); g.applyMatrix4(M); g.computeBoundingBox(); return g; });
   const fb = new THREE.Box3(); fitted.forEach((g) => fb.union(g.boundingBox));
   const fH = fb.max.y - fb.min.y;
@@ -222,8 +223,8 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     }
   });
   const cL = centroid(cuffL), cR = centroid(cuffR), hL = centroid(hemL), hR = centroid(hemR);
-  if (cL && cR) { aimBone(bones.LeftArm, bones.LeftHand, cL); aimBone(bones.RightArm, bones.RightHand, cR); }
-  if (hL && hR) {
+  if (!opts.prefit && cL && cR) { aimBone(bones.LeftArm, bones.LeftHand, cL); aimBone(bones.RightArm, bones.RightHand, cR); }
+  if (!opts.prefit && hL && hR) {
     aimBone(bones.LeftUpLeg, bones.LeftFoot, hL.clone().setY(hL.y + fH * 0.02));
     aimBone(bones.RightUpLeg, bones.RightFoot, hR.clone().setY(hR.y + fH * 0.02));
   }
@@ -336,5 +337,5 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     return g;
   });
 
-  return { geometries, skeleton, bindPose, info: { hasLegs, scale: s, sleeves: !!(cL && cR), vertices: nW } };
+  return { geometries, skeleton, bindPose, info: { hasLegs, scale: opts.prefit ? 1 : s, sleeves: !!(cL && cR), vertices: nW } };
 }

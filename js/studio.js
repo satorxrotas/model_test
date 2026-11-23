@@ -8,6 +8,7 @@ import { extractParts, fitGarment, bonesByName, snapshotPose, applyPose } from '
 import { exportRiggedGLB } from './exportrig.js';
 import { POSES, bakePoses } from './poses.js';
 import { REF_MOTION } from './refmotion.js';
+import { getGarment } from './handoff.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -243,7 +244,7 @@ function rebuildGarment() {
   if (garment) { scene.remove(garment); garment.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); }); }
   const t0 = performance.now();
   // push-out only matters when the body is visible; otherwise keep the garment's exact shape
-  const opts = { ...state.fit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
+  const opts = { ...state.fit, prefit: state.prefit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
   const res = fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts });
   bindPose = res.bindPose;
   garmentSkeleton = res.skeleton;
@@ -259,7 +260,7 @@ function rebuildGarment() {
   scene.add(garment);
   setMotion(was, 0);
   const ms = Math.round(performance.now() - t0);
-  status(`${garmentName} · ${res.info.vertices.toLocaleString()} verts · fitted in ${ms} ms${res.info.sleeves ? '' : ' · no sleeves detected'}${res.info.hasLegs ? '' : ' · no legs detected'}`);
+  status(`${garmentName} · ${res.info.vertices.toLocaleString()} verts · fitted in ${ms} ms${res.info.sleeves || state.prefit ? '' : ' · no sleeves detected'}${res.info.hasLegs || state.prefit ? '' : ' · no legs detected'}`);
   window.__fitInfo = res.info;
 }
 
@@ -272,7 +273,7 @@ async function loadGarmentFile(file) {
     else if (ext === 'glb' || ext === 'gltf') obj = (await gltfLoader.parseAsync(await file.arrayBuffer(), '')).scene;
     else if (ext === 'fbx') obj = new FBXLoader().parse(await file.arrayBuffer(), '');
     else throw new Error('Use an .obj, .glb/.gltf or .fbx file.');
-    state.partColors = {};
+    state.partColors = {}; state.prefit = false;
     await loadGarmentFromObject(obj, file.name);
   } catch (e) { console.error(e); status(`Couldn't load ${file.name}: ${e.message}`); }
 }
@@ -494,8 +495,19 @@ function bindUI() {
     await loadRigs();
     setBodyMode(state.body);
     status('Loading garment…');
-    const text = await (await fetch('assets/garments/ladies-tracksuit.obj')).text();
-    await loadGarmentFromObject(new OBJLoader().parse(text), 'ladies-tracksuit.obj');
+    // a garment sent from Image to Model: already built on this body, so it skips the auto-placement
+    const handoff = new URLSearchParams(location.search).get('garment') === 'handoff' ? await getGarment() : null;
+    if (handoff) {
+      const obj = new OBJLoader().parse(handoff.obj);
+      const img = new Image(); img.src = URL.createObjectURL(handoff.texture); await img.decode();
+      const map = new THREE.Texture(img); map.colorSpace = THREE.SRGBColorSpace; map.needsUpdate = true;
+      obj.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ name: handoff.name, map }); });
+      state.prefit = true;
+      await loadGarmentFromObject(obj, handoff.name);
+    } else {
+      const text = await (await fetch('assets/garments/ladies-tracksuit.obj')).text();
+      await loadGarmentFromObject(new OBJLoader().parse(text), 'ladies-tracksuit.obj');
+    }
     document.body.classList.add('ready');
   } catch (e) { console.error(e); status(`Error: ${e.message}`); }
 })();
