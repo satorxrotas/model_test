@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Poly Simply</title>
+<meta name="description" content="Upload a high-poly model, simplify it to low poly, export OBJ for Blender.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0f; --panel: rgba(20,20,23,.96); --line: rgba(255,255,255,.08); --text: #ecebe8; --mute: #8d8b87;
+    --accent: #e8ff5a; --field: #1d1d21;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Inter Tight', system-ui, sans-serif; overflow: hidden; }
+  .tabs { height: 46px; display: flex; align-items: stretch; gap: 4px; padding: 0 14px; background: #0a0a0b; border-bottom: 1px solid var(--line); }
+  .tabs a { display: flex; align-items: center; padding: 0 14px; color: var(--mute); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; }
+  .tabs a:hover { color: var(--text); }
+  .tabs a[aria-current=page] { color: var(--text); border-bottom-color: var(--accent); }
+  #app { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 46px); }
+  aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 20px 18px 60px; }
+  .brand { font-size: 30px; font-weight: 700; letter-spacing: -.02em; line-height: 1; margin: 0 0 6px; }
+  .brand span { color: var(--accent); }
+  .sub { color: var(--mute); font-size: 12.5px; margin: 0 0 16px; }
+  section { border-top: 1px solid var(--line); padding: 14px 0 6px; }
+  h2 { font: 500 10.5px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin: 0 0 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 9px; }
+  .val { font: 12px 'JetBrains Mono', monospace; color: var(--text); }
+  .file { display: block; text-align: center; cursor: pointer; border: 1px dashed rgba(255,255,255,.18); border-radius: 10px; padding: 18px 12px; color: var(--mute); }
+  .file:hover { color: var(--text); border-color: var(--accent); }
+  .file b { display: block; color: var(--text); font-weight: 600; margin-bottom: 4px; }
+  .file input { display: none; }
+  .hint { color: var(--mute); font-size: 11.5px; margin: 6px 0 4px; }
+  table { width: 100%; border-collapse: collapse; font: 12px 'JetBrains Mono', monospace; }
+  th { text-align: left; color: var(--mute); font-weight: 400; padding: 4px 0; }
+  td { text-align: right; padding: 4px 0; }
+  tr.hi td { color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=number], input[type=text] { width: 100%; font: 12px 'JetBrains Mono', monospace; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
+  input[type=number]:focus, input[type=text]:focus { border-color: var(--accent); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .chip, .seg button { font: 12px 'JetBrains Mono', monospace; color: var(--mute); background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+  .chip.on, .seg button.on { color: #111; background: var(--accent); border-color: var(--accent); }
+  .seg { display: flex; gap: 6px; margin-bottom: 10px; }
+  .seg button { flex: 1; border-radius: 8px; padding: 7px 0; font-family: inherit; font-size: 12.5px; }
+  .check { display: flex; gap: 9px; align-items: flex-start; margin: 0 0 9px; cursor: pointer; }
+  .check input { margin: 2px 0 0; accent-color: var(--accent); }
+  .check small { display: block; color: var(--mute); font-size: 11.5px; }
+  button.primary { width: 100%; font: 600 13px 'Inter Tight', sans-serif; color: #111; background: var(--accent); border: 0; border-radius: 9px; padding: 11px; cursor: pointer; }
+  button.primary:disabled, button.link:disabled { opacity: .4; cursor: not-allowed; }
+  button.link { background: none; border: 0; color: var(--mute); text-decoration: underline; cursor: pointer; font: inherit; padding: 8px 0 0; }
+  button.link:hover { color: var(--text); }
+  body:not(.loaded) .needs-model { opacity: .45; pointer-events: none; }
+  main { position: relative; overflow: hidden; background: radial-gradient(ellipse at center, #1c1c20 0%, #0b0b0c 75%); }
+  #stage { display: block; width: 100%; height: 100%; }
+  #divider { position: absolute; top: 0; bottom: 0; width: 24px; margin-left: -12px; cursor: ew-resize; touch-action: none; }
+  #divider::before { content: ''; position: absolute; left: 11px; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .8; }
+  #divider::after { content: '⟷'; position: absolute; left: 0; top: 50%; width: 24px; height: 24px; margin-top: -12px; border-radius: 50%; background: var(--accent); color: #111; font-size: 13px; display: grid; place-items: center; }
+  .label { position: absolute; top: 14px; font: 11px 'JetBrains Mono', monospace; background: rgba(0,0,0,.55); padding: 5px 9px; border-radius: 6px; color: var(--text); }
+  #lbl-orig { left: 14px; } #lbl-low { right: 14px; color: var(--accent); }
+  body:not(.split) .label { display: none; }
+  #status { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 28px); font: 11px 'JetBrains Mono', monospace; color: var(--mute); background: rgba(0,0,0,.55); padding: 6px 10px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--mute); pointer-events: none; }
+  #empty b { display: block; font-size: 18px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
+  body.loaded #empty { display: none; }
+  body.drag main::after { content: 'Drop model (and its .mtl / textures, or a .zip)'; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(0,0,0,.6); }
+  /* password gate */
+  body.locked #app, body.locked .tabs { display: none; }
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, #1a1a1d 0%, #0b0b0c 70%); padding: 16px; }
+  #gate form { width: 100%; max-width: 320px; display: grid; gap: 10px; }
+  #gate input[type=password] { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; outline: none; }
+  #gate input[type=password]:focus { border-color: var(--accent); }
+  #gate-err { color: #ff6b62; font-size: 12px; min-height: 16px; margin: 0; }
+  #gate .shake { animation: shake .35s; }
+  @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  @media (max-width: 760px) {
+    html, body { overflow: auto; }
+    #app { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    main { order: 1; height: 55vh; }
+    aside { order: 2; border-right: 0; border-top: 1px solid var(--line); padding: 16px 16px 40px; overflow: visible; }
+    .tabs { overflow-x: auto; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body class="locked split" data-app="poly">
+<div id="gate">
+  <form id="gate-form" autocomplete="off">
+    <p class="brand">Poly <span>Simply</span></p>
+    <p class="sub" style="margin:0 0 6px">Enter the password to continue.</p>
+    <input type="password" id="gate-pw" placeholder="Password" aria-label="Password" required>
+    <label class="row" style="margin:0"><span style="color:var(--mute)">Remember on this device</span><input type="checkbox" id="gate-remember" checked></label>
+    <button class="primary" type="submit">Enter</button>
+    <p id="gate-err" role="alert"></p>
+  </form>
+</div>
+
+<nav class="tabs" aria-label="Tools"><a href="index.html">Motion Studio</a><a href="poly.html" aria-current="page">Poly Simply</a></nav>
+
+<div id="app">
+  <aside>
+    <h1 class="brand">Poly <span>Simply</span></h1>
+    <p class="sub">High-poly in, low-poly out. Exports OBJ for Blender.</p>
+
+    <section>
+      <h2>Model</h2>
+      <label class="file"><input type="file" id="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.fbx,.stl,.ply,.zip,.png,.jpg,.jpeg,.webp"><b>Upload high-poly model</b>.glb · .gltf · .obj · .fbx · .stl · .ply · .zip<br>or drop it anywhere</label>
+      <p class="hint">For OBJ with textures, select the .obj, .mtl and images together, or drop a .zip of the folder.</p>
+      <p class="hint" id="size"></p>
+      <table class="needs-model">
+        <tr><th></th><th style="text-align:right">Triangles</th><th style="text-align:right">Vertices</th></tr>
+        <tr><th>Original</th><td id="orig-tris">—</td><td id="orig-verts">—</td></tr>
+        <tr class="hi"><th>Low poly</th><td id="low-tris">—</td><td id="low-verts">—</td></tr>
+        <tr><th>Reduction</th><td id="reduction">—</td><td></td></tr>
+      </table>
+    </section>
+
+    <section class="needs-model">
+      <h2>Simplify</h2>
+      <div class="row"><span>Keep</span><span class="val" id="ratio-v">25%</span></div>
+      <input type="range" id="ratio" min="0" max="1000" step="1" aria-label="Detail to keep">
+      <div class="chips">
+        <button class="chip" data-pct="50">50%</button><button class="chip" data-pct="25">25%</button><button class="chip" data-pct="10">10%</button><button class="chip" data-pct="5">5%</button><button class="chip" data-pct="2">2%</button><button class="chip" data-pct="1">1%</button>
+      </div>
+      <label class="row"><span>Target triangles</span><input type="number" id="target" min="1" step="1" style="width:130px"></label>
+      <label class="check"><input type="checkbox" id="shading" checked><span>Preserve shading<small>Keeps curvature where normals change.</small></span></label>
+      <label class="check"><input type="checkbox" id="lockBorder"><span>Protect open edges<small>Hems, cuffs and seams between parts stay exact.</small></span></label>
+      <label class="check"><input type="checkbox" id="mergeSeams"><span>Allow collapsing across UV seams<small>Goes much lower. Textures can stretch slightly near seams.</small></span></label>
+      <label class="check"><input type="checkbox" id="prune"><span>Remove tiny pieces<small>Drops small floating bits at low detail.</small></span></label>
+    </section>
+
+    <section class="needs-model">
+      <h2>View</h2>
+      <div class="seg"><button data-view="split" class="on">Split</button><button data-view="original">Original</button><button data-view="low">Low poly</button></div>
+      <label class="check"><input type="checkbox" id="wire"><span>Wireframe</span></label>
+      <label class="check"><input type="checkbox" id="spin"><span>Auto-rotate</span></label>
+    </section>
+
+    <section class="needs-model">
+      <h2>Export</h2>
+      <label class="row" style="display:block"><span style="display:block;margin-bottom:6px">File name</span><input type="text" id="name" spellcheck="false"></label>
+      <button class="primary" id="export-zip">Export OBJ + materials (.zip)</button>
+      <button class="link" id="export-obj">OBJ only (.obj)</button>
+      <p class="hint">Blender 3.5: File › Import › Wavefront (.obj), default settings. Unzip first so the .mtl and textures sit next to the .obj.</p>
+    </section>
+  </aside>
+
+  <main>
+    <canvas id="stage"></canvas>
+    <div id="divider" hidden></div>
+    <div class="label" id="lbl-orig">Original</div>
+    <div class="label" id="lbl-low">Low poly</div>
+    <div id="empty"><div><b>Drop a high-poly model</b>.glb · .obj (+ .mtl & textures) · .fbx · .stl · .ply · .zip</div></div>
+    <div id="status">Loading…</div>
+  </main>
+</div>
+<script type="module" src="js/gate.js"></script>
+</body>
+</html>

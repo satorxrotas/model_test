@@ -15,7 +15,7 @@ function stored() {
 async function unlock() {
   document.body.classList.remove('locked');
   document.getElementById('gate')?.remove();
-  await import('./studio.js');
+  await import(`./${document.body.dataset.app || 'studio'}.js`);
 }
 
 (async () => {
