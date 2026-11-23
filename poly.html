@@ -66,6 +66,9 @@
   #empty b { display: block; font-size: 18px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
   body.loaded #empty { display: none; }
   body.drag main::after { content: 'Drop model (and its .mtl / textures, or a .zip)'; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(0,0,0,.6); }
+  #uvmap { width: 100%; aspect-ratio: 1; display: block; border-radius: 8px; border: 1px solid var(--line); }
+  body.quadmode .tri-only, body:not(.quadmode) .quad-only { display: none; }
+  .seg button { white-space: nowrap; }
   /* password gate */
   body.locked #app, body.locked .tabs { display: none; }
   #gate { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, #1a1a1d 0%, #0b0b0c 70%); padding: 16px; }
@@ -112,11 +115,19 @@
       <p class="hint">For OBJ with textures, select the .obj, .mtl and images together, or drop a .zip of the folder.</p>
       <p class="hint" id="size"></p>
       <table class="needs-model">
-        <tr><th></th><th style="text-align:right">Triangles</th><th style="text-align:right">Vertices</th></tr>
-        <tr><th>Original</th><td id="orig-tris">—</td><td id="orig-verts">—</td></tr>
-        <tr class="hi"><th>Low poly</th><td id="low-tris">—</td><td id="low-verts">—</td></tr>
-        <tr><th>Reduction</th><td id="reduction">—</td><td></td></tr>
+        <tr><th></th><th style="text-align:right">Faces</th><th style="text-align:right">Verts</th><th style="text-align:right">Quads</th></tr>
+        <tr><th>Original</th><td id="orig-faces">—</td><td id="orig-verts">—</td><td id="orig-quads">—</td></tr>
+        <tr class="hi"><th>Low poly</th><td id="low-faces">—</td><td id="low-verts">—</td><td id="low-quads">—</td></tr>
+        <tr><th>Reduction</th><td id="reduction">—</td><td></td><td></td></tr>
       </table>
+    </section>
+
+    <section class="needs-model">
+      <h2>Topology</h2>
+      <div class="seg"><button data-topo="quads" class="on">Quads · clean grid</button><button data-topo="tris">Triangles</button></div>
+      <p class="hint quad-only">Removes whole edge loops so the result stays an even quad grid that follows the form — ready for seams and unwrapping. Best for quad models (Marvelous, CLO, sculpts).</p>
+      <p class="hint tri-only">Collapses triangles. Works on any model and keeps the original UVs and textures.</p>
+      <p class="hint" id="detected"></p>
     </section>
 
     <section class="needs-model">
@@ -126,15 +137,25 @@
       <div class="chips">
         <button class="chip" data-pct="50">50%</button><button class="chip" data-pct="25">25%</button><button class="chip" data-pct="10">10%</button><button class="chip" data-pct="5">5%</button><button class="chip" data-pct="2">2%</button><button class="chip" data-pct="1">1%</button>
       </div>
-      <label class="row"><span>Target triangles</span><input type="number" id="target" min="1" step="1" style="width:130px"></label>
-      <label class="check"><input type="checkbox" id="shading" checked><span>Preserve shading<small>Keeps curvature where normals change.</small></span></label>
-      <label class="check"><input type="checkbox" id="lockBorder"><span>Protect open edges<small>Hems, cuffs and seams between parts stay exact.</small></span></label>
-      <label class="check"><input type="checkbox" id="mergeSeams"><span>Allow collapsing across UV seams<small>Goes much lower. Textures can stretch slightly near seams.</small></span></label>
-      <label class="check"><input type="checkbox" id="prune"><span>Remove tiny pieces<small>Drops small floating bits at low detail.</small></span></label>
+      <label class="row"><span>Target <span id="unit">faces</span></span><input type="number" id="target" min="1" step="1" style="width:130px"></label>
+      <label class="check tri-only"><input type="checkbox" id="shading" checked><span>Preserve shading<small>Keeps curvature where normals change.</small></span></label>
+      <label class="check tri-only"><input type="checkbox" id="lockBorder"><span>Protect open edges<small>Hems, cuffs and seams between parts stay exact.</small></span></label>
+      <label class="check tri-only"><input type="checkbox" id="mergeSeams"><span>Allow collapsing across UV seams<small>Goes much lower. Textures can stretch slightly near seams.</small></span></label>
+      <label class="check tri-only"><input type="checkbox" id="prune"><span>Remove tiny pieces<small>Drops small floating bits at low detail.</small></span></label>
+    </section>
+
+    <section class="needs-model">
+      <h2>UVs</h2>
+      <label class="check"><input type="checkbox" id="autoUV" checked><span>Auto UV unwrap<small>Islands split by surface direction (like Smart UV Project), flattened with low stretch, packed at even texel density. Replaces the original UVs.</small></span></label>
+      <div id="uvbox" hidden>
+        <canvas id="uvmap" aria-label="UV layout preview"></canvas>
+        <div class="row" style="margin-top:6px"><span class="hint" id="uvinfo" style="margin:0"></span><button class="link" id="uv-png" style="padding:0">UV layout .png</button></div>
+      </div>
     </section>
 
     <section class="needs-model">
       <h2>View</h2>
+      <div class="seg"><button data-look="material" class="on">Material</button><button data-look="checker">UV checker</button></div>
       <div class="seg"><button data-view="split" class="on">Split</button><button data-view="original">Original</button><button data-view="low">Low poly</button></div>
       <label class="check"><input type="checkbox" id="wire"><span>Wireframe</span></label>
       <label class="check"><input type="checkbox" id="spin"><span>Auto-rotate</span></label>
@@ -143,9 +164,9 @@
     <section class="needs-model">
       <h2>Export</h2>
       <label class="row" style="display:block"><span style="display:block;margin-bottom:6px">File name</span><input type="text" id="name" spellcheck="false"></label>
-      <button class="primary" id="export-zip">Export OBJ + materials (.zip)</button>
+      <button class="primary" id="export-zip">Export OBJ (.zip)</button>
       <button class="link" id="export-obj">OBJ only (.obj)</button>
-      <p class="hint">Blender 3.5: File › Import › Wavefront (.obj), default settings. Unzip first so the .mtl and textures sit next to the .obj.</p>
+      <p class="hint">The zip holds the .obj, its .mtl, and the textures or UV layout. Blender 3.5: unzip, then File › Import › Wavefront (.obj) with default settings.</p>
     </section>
   </aside>
 

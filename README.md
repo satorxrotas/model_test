@@ -16,7 +16,9 @@ Best results: garments modelled in an A- or T-pose, fitted (not floor-length/ver
 Second tab. Upload a high-poly model (.glb/.gltf, .obj + .mtl + textures, .fbx, .stl, .ply, or a .zip of any of these), pick how much detail to keep (0.5–100%, or an exact triangle target), compare original vs low poly in a split view, and export OBJ.
 
 - Simplifier: meshoptimizer 1.3 quadric edge collapse (same family as Blender's Decimate › Collapse), shading- and UV-aware; per-part, so materials stay separate.
-- Options: protect open edges, allow collapsing across UV seams (stronger reduction), remove tiny pieces.
+- **Quads mode** (auto-selected for quad models, e.g. Marvelous/CLO exports): collapses whole quad strips (edge loops) toward an even target spacing, relaxes the grid and snaps it back onto the original surface (three-mesh-bvh), and fixes inconsistent face winding. Output stays a clean quad grid that follows the form. OBJ quads are read natively; GLB/FBX quads are rebuilt from their triangles.
+- **Triangles mode**: options to protect open edges, allow collapsing across UV seams (stronger reduction), remove tiny pieces.
+- **Auto UV unwrap** (`js/uvunwrap.js`): islands split by surface direction (66°, like Smart UV Project), each flattened with LSCM (conformal, low stretch), scaled to one texel density and raster-packed into 0–1. Quads stay whole. UV checker view, layout preview, and a 2048 px UV layout PNG in the export. Off by default for textured models so their original UVs are kept.
 - Export: OBJ + MTL + textures as .zip (original texture files reused), or OBJ only. Y-up, source units — Blender 3.5+: File › Import › Wavefront (.obj) with default settings.
 
 ## Files
@@ -26,9 +28,11 @@ Second tab. Upload a high-poly model (.glb/.gltf, .obj + .mtl + textures, .fbx, 
 - `js/exportrig.js` – rigged .glb export
 - `js/poses.js` – procedural in-place model poses (two-bone IK)
 - `assets/rigs/` – body (`Michelle.glb`) and motion library (`Xbot.glb`), Mixamo rigs from the three.js examples
-- `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simply (loading, simplification, OBJ/MTL writer)
+- `poly.html`, `js/poly.js`, `js/polycore.js` – Poly Simply (loading, simplification, OBJ/MTL writers)
+- `js/quadmesh.js` – quad-preserving reduction; `js/uvunwrap.js` – automatic UV unwrap
 - `vendor/three/` – three.js r170 (MIT)
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
+- `vendor/three-mesh-bvh/` – three-mesh-bvh 0.9.18 (MIT)
 
 The page sits behind a client-side password gate (`js/gate.js`, stores only a SHA-256 hash). It keeps casual visitors out; the repo itself is public.
 

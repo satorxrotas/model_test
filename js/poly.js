@@ -10,16 +10,21 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { zipSync, unzipSync, strToU8 } from 'three/addons/libs/fflate.module.js';
 import { MeshoptDecoder } from '../vendor/meshoptimizer/meshopt_decoder.module.js';
-import { ready, extractParts, simplifyParts, toGeometry, countTris, countVerts, writeOBJ, textureBytes } from './polycore.js';
+import { ready, extractParts, simplifyParts, toGeometry, countTris, countVerts, writeOBJ, writePolyOBJ, textureBytes } from './polycore.js';
+import { polyFromOBJ, polyFromParts, makeSurface, reduceQuads, faceStats, polyToGeometry, polyWire } from './quadmesh.js';
+import { unwrap, coverage } from './uvunwrap.js';
 
 const $ = (s) => document.querySelector(s);
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
 const status = (msg) => { $('#status').textContent = msg; };
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+const ms = (t) => (t < 1000 ? `${Math.round(t)} ms` : `${(t / 1000).toFixed(1)} s`);
 
 const MODEL_EXT = ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply'];
-const state = { ratio: 0.25, lockBorder: false, prune: false, shading: true, mergeSeams: false, view: 'split', wire: false, spin: false, split: 0.5 };
+const state = { ratio: 0.25, topo: 'quads', autoUV: true, look: 'material', lockBorder: false, prune: false, shading: true, mergeSeams: false, view: 'split', wire: false, spin: false, split: 0.5 };
 let parts = null, simplified = null, baseName = 'model', fileMap = new Map();
+let base = null, surface = null, baseStats = null; // quad source mesh + BVH of the original surface
+let result = null; // { mesh, uv, materials } when the polygon path is used (quad mode or auto UV)
 
 /* ---------------- viewer ---------------- */
 
@@ -40,18 +45,57 @@ const grid = new THREE.GridHelper(1, 20, 0x3a3a40, 0x26262b); scene.add(grid);
 
 const origGroup = new THREE.Group(), simpGroup = new THREE.Group();
 scene.add(origGroup, simpGroup);
-const wireMat = new THREE.MeshBasicMaterial({ color: 0xe8ff5a, wireframe: true, transparent: true, opacity: 0.35, depthTest: true, polygonOffset: true, polygonOffsetFactor: -1 });
+const wireMat = new THREE.MeshBasicMaterial({ color: 0xe8ff5a, wireframe: true, transparent: true, opacity: 0.35, polygonOffset: true, polygonOffsetFactor: -1 });
+const lineMat = new THREE.LineBasicMaterial({ color: 0x15151a, transparent: true, opacity: 0.85 });
+const greyMat = new THREE.MeshStandardMaterial({ color: 0xbdbab4, roughness: 0.7, side: THREE.DoubleSide });
 
-function buildGroup(group, list) {
-  group.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
-  group.clear();
-  for (const p of list) {
-    const g = toGeometry(p);
-    const mat = p.material.clone(); mat.side = THREE.DoubleSide; mat.vertexColors = false;
-    group.add(new THREE.Mesh(g, mat));
-    const w = new THREE.Mesh(g, wireMat); w.userData.wire = true; w.visible = state.wire; group.add(w);
+// UV checker: numbered squares make stretch and texel density easy to judge
+const checker = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 1024;
+  const g = c.getContext('2d'), n = 32, s = 1024 / n;
+  const hues = [0, 30, 55, 140, 190, 220, 270, 320];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    g.fillStyle = (x + y) % 2 ? '#2d2d33' : '#e9e6df'; g.fillRect(x * s, y * s, s, s);
+    if ((x + y) % 2 === 0) { g.fillStyle = `hsl(${hues[(x >> 1) % 8]} 70% 55%)`; g.fillRect(x * s + s * 0.38, y * s + s * 0.38, s * 0.24, s * 0.24); }
   }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+})();
+const checkerMat = new THREE.MeshStandardMaterial({ map: checker, roughness: 0.8, side: THREE.DoubleSide });
+
+function disposeGroup(group) { group.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); group.clear(); }
+
+function addWire(group, geom) { const w = new THREE.LineSegments(geom, lineMat); w.userData.wire = true; w.visible = state.wire; group.add(w); }
+
+// triangle parts (original model, or triangle-mode result without auto UV)
+function buildTriGroup(group, list, polyForWire) {
+  disposeGroup(group);
+  for (const p of list) {
+    const mat = p.material.clone(); mat.side = THREE.DoubleSide; mat.vertexColors = false;
+    const g = toGeometry(p);
+    group.add(new THREE.Mesh(g, mat));
+    if (!polyForWire) { const w = new THREE.Mesh(g, wireMat); w.userData.wire = true; w.visible = state.wire; group.add(w); }
+  }
+  if (polyForWire) addWire(group, polyWire(polyForWire)); // show the real quads, not render triangles
 }
+
+// polygon result (quad mode or auto UV): one mesh per material, per-corner UVs, polygon wire
+function buildPolyGroup(group, r) {
+  disposeGroup(group);
+  const { mesh, uv, materials } = r;
+  const byMat = new Map();
+  mesh.faces.forEach((f, fi) => { const k = mesh.fmat[fi]; if (!byMat.has(k)) byMat.set(k, []); byMat.get(k).push(fi); });
+  for (const [k, fis] of byMat) {
+    const sub = { pos: mesh.pos, faces: fis.map((fi) => mesh.faces[fi]) };
+    const g = polyToGeometry(sub, uv ? { ...uv, corner: fis.map((fi) => uv.corner[fi]) } : null);
+    let mat;
+    if (state.look === 'checker' && uv) mat = checkerMat;
+    else { mat = (materials[k] || greyMat).clone(); mat.side = THREE.DoubleSide; mat.vertexColors = false; if (uv || state.topo === 'quads') { mat.map = null; mat.normalMap = null; } mat.needsUpdate = true; }
+    group.add(new THREE.Mesh(g, mat));
+  }
+  addWire(group, polyWire(mesh));
+}
+
 function setWire(on) { state.wire = on; scene.traverse((o) => { if (o.userData.wire) o.visible = on; }); }
 
 function frame(obj) {
@@ -61,7 +105,8 @@ function frame(obj) {
   camera.near = r / 500; camera.far = r * 50; camera.updateProjectionMatrix();
   camera.position.copy(c).add(new THREE.Vector3(0.35, 0.18, 1).normalize().multiplyScalar(r * 1.9));
   grid.scale.setScalar(r * 2.5); grid.position.set(c.x, box.min.y, c.z);
-  $('#size').textContent = `${size.x.toPrecision(3)} × ${size.y.toPrecision(3)} × ${size.z.toPrecision(3)} units`;
+  const n3 = (v) => Number(v.toPrecision(3)).toLocaleString('en-US');
+  $('#size').textContent = `${n3(size.x)} × ${n3(size.y)} × ${n3(size.z)} units`;
 }
 
 function resize() {
@@ -112,8 +157,8 @@ function makeManager() {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier((url) => {
     if (/^data:/.test(url)) return url;
-    const base = decodeURIComponent(url.split(/[?#]/)[0].split(/[\\/]/).pop()).toLowerCase();
-    return urls.get(base) || url;
+    const b = decodeURIComponent(url.split(/[?#]/)[0].split(/[\\/]/).pop()).toLowerCase();
+    return urls.get(b) || url;
   });
   manager.revoke = () => urls.forEach((u) => URL.revokeObjectURL(u));
   return { manager, urlOf: (name) => urls.get(name.toLowerCase()) };
@@ -121,8 +166,6 @@ function makeManager() {
 
 // remember which uploaded file each texture came from, so export can reuse the original bytes
 async function tagTextures(root) {
-  const byUrl = new Map();
-  for (const [name, file] of fileMap) byUrl.set(name, file);
   const jobs = [];
   root.traverse((o) => {
     if (!o.isMesh) return;
@@ -130,7 +173,7 @@ async function tagTextures(root) {
       for (const t of [m.map, m.normalMap]) {
         if (!t || t.userData.fileName !== undefined) continue;
         const src = t.userData.sourceName || t.name || '';
-        const file = byUrl.get(src.toLowerCase());
+        const file = fileMap.get(src.toLowerCase());
         t.userData.fileName = file ? src : '';
         if (file) jobs.push(file.arrayBuffer().then((b) => { t.userData.bytes = new Uint8Array(b); }));
       }
@@ -157,6 +200,7 @@ async function loadFiles(list) {
   baseName = main.name.replace(/\.[^.]+$/, '');
   status(`Loading ${main.name} (${(main.size / 1e6).toFixed(1)} MB)…`);
   document.body.classList.remove('loaded');
+  base = surface = result = null;
   await nextFrame();
   const { manager, urlOf } = makeManager();
   // keep each texture's file name (loaders don't), so the export can reference and reuse it
@@ -164,14 +208,13 @@ async function loadFiles(list) {
   const reverse = new Map([...fileMap.entries()].map(([k, f]) => [urlOf(k), f.name]));
   THREE.TextureLoader.prototype.load = function (url, onLoad, onProgress, onError) {
     const tex = new THREE.Texture();
-    const real = this.manager.resolveURL(url);
-    tex.userData.sourceName = reverse.get(real) || decodeURIComponent(String(url).split('/').pop());
+    tex.userData.sourceName = reverse.get(this.manager.resolveURL(url)) || decodeURIComponent(String(url).split('/').pop());
     const loader = new THREE.ImageLoader(this.manager); loader.setCrossOrigin(this.crossOrigin); loader.setPath(this.path);
     origLoad.call(loader, url, (image) => { tex.image = image; tex.needsUpdate = true; onLoad && onLoad(tex); }, onProgress, onError);
     return tex;
   };
   try {
-    let root, flipV = false;
+    let root, flipV = false, objText = null;
     const url = urlOf(main.name);
     if (ext === 'glb' || ext === 'gltf') {
       const gl = new GLTFLoader(manager);
@@ -180,33 +223,39 @@ async function loadFiles(list) {
       const res = await gl.loadAsync(url);
       root = res.scene; flipV = true;
     } else if (ext === 'obj') {
-      const text = await main.text();
+      objText = await main.text();
       const obj = new OBJLoader(manager);
-      const lib = (text.match(/^mtllib\s+(.+)$/m) || [])[1]?.trim();
+      const lib = (objText.match(/^mtllib\s+(.+)$/m) || [])[1]?.trim();
       const mtlFile = lib && fileMap.get(lib.split(/[\\/]/).pop().toLowerCase());
       if (mtlFile) {
         const mats = new MTLLoader(manager).parse(await mtlFile.text(), '');
         mats.preload(); obj.setMaterials(mats);
       }
-      root = obj.parse(text);
-      if (!mtlFile) root.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ name: o.material?.name || 'default', color: 0xbdbab4, roughness: 0.7 }); });
+      root = obj.parse(objText);
+      if (!mtlFile) root.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ name: [].concat(o.material)[0]?.name || 'default', color: 0xbdbab4, roughness: 0.7 }); });
       await new Promise((r) => { if (manager.itemsLoaded >= manager.itemsTotal) r(); else manager.onLoad = r; setTimeout(r, 8000); });
     } else if (ext === 'fbx') {
       root = new FBXLoader(manager).parse(await main.arrayBuffer(), '');
     } else {
       const geo = ext === 'stl' ? new STLLoader().parse(await main.arrayBuffer()) : new PLYLoader().parse(await main.arrayBuffer());
       if (!geo.attributes.normal) geo.computeVertexNormals();
-      root = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: geo.attributes.color ? 0xffffff : 0xbdbab4, vertexColors: !!geo.attributes.color, roughness: 0.6 }));
+      root = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xbdbab4, roughness: 0.6 }));
     }
     await tagTextures(root);
     status('Preparing mesh…'); await nextFrame();
     await ready;
     parts = extractParts(root, { flipV });
     if (!parts.length) throw new Error('That file has no mesh geometry.');
-    buildGroup(origGroup, parts);
+    // polygon version of the source: native OBJ faces, or quads rebuilt from triangles
+    base = objText ? polyFromOBJ(objText) : polyFromParts(parts, { pairQuads: true });
+    baseStats = faceStats(base);
+    const quadShare = baseStats.quads / Math.max(1, baseStats.faces);
+    setTopo(quadShare >= 0.7 ? 'quads' : 'tris', false);
+    const textured = parts.some((p) => p.material?.map);
+    state.autoUV = !textured; $('#autoUV').checked = state.autoUV;
+    $('#detected').textContent = `Detected ${Math.round(quadShare * 100)}% quads → ${quadShare >= 0.7 ? 'Quads' : 'Triangles'} mode.${textured ? ' Auto UV is off because this model has textures; turning it on replaces its UVs.' : ''}`;
+    buildOrig();
     frame(origGroup);
-    $('#orig-tris').textContent = fmt(countTris(parts));
-    $('#orig-verts').textContent = fmt(countVerts(parts));
     $('#name').value = `${baseName}_lowpoly`;
     document.body.classList.add('loaded');
     await run();
@@ -219,50 +268,128 @@ async function loadFiles(list) {
 }
 const TextureLoaderLoad = THREE.TextureLoader.prototype.load;
 
-/* ---------------- simplify ---------------- */
+function buildOrig() {
+  if (!parts) return;
+  buildTriGroup(origGroup, parts, state.topo === 'quads' ? base : null);
+  const quad = state.topo === 'quads';
+  $('#orig-faces').textContent = fmt(quad ? baseStats.faces : countTris(parts));
+  $('#orig-verts').textContent = fmt(quad ? baseStats.verts : countVerts(parts));
+  $('#orig-quads').textContent = quad ? `${Math.round((100 * baseStats.quads) / Math.max(1, baseStats.faces))}%` : '—';
+}
+
+/* ---------------- process ---------------- */
+
+const sourceFaces = () => (state.topo === 'quads' ? baseStats.faces : countTris(parts));
+const materialsFor = (names) => names.map((n, i) => parts.find((p) => (p.material?.name || '') === n)?.material || parts[i]?.material || null);
 
 let running = false, queued = false;
 async function run() {
   if (!parts) return;
   if (running) { queued = true; return; }
   running = true;
-  const total = countTris(parts);
-  status(`Simplifying ${fmt(total)} triangles…`); await nextFrame();
-  const t0 = performance.now();
-  simplified = simplifyParts(parts, state.ratio, state);
-  const ms = performance.now() - t0;
-  buildGroup(simpGroup, simplified);
-  const tris = countTris(simplified), verts = countVerts(simplified);
-  $('#low-tris').textContent = fmt(tris);
-  $('#low-verts').textContent = fmt(verts);
-  $('#reduction').textContent = `${(100 * (1 - tris / total)).toFixed(1)}%`;
-  $('#lbl-orig').textContent = `Original · ${fmt(total)} tris`;
-  $('#lbl-low').textContent = `Low poly · ${fmt(tris)} tris`;
-  const short = tris > Math.ceil(total * state.ratio) * 1.15 + 12;
-  const why = state.lockBorder ? 'protected open edges' : 'UV seams / hard edges';
-  status(`${baseName} · ${fmt(total)} → ${fmt(tris)} triangles in ${ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s'}${short ? ` · stopped early to keep ${why}${state.mergeSeams ? '' : ' — try “Allow collapsing across UV seams”'}` : ''}`);
+  try {
+    const total = sourceFaces(), target = Math.max(4, Math.round(total * state.ratio));
+    let t0 = performance.now(), tReduce, tUV = 0, faces, verts, quadPct = '—';
+    if (state.topo === 'quads') {
+      status(`Reducing ${fmt(total)} faces to a ${fmt(target)}-face quad grid…`); await nextFrame();
+      if (!surface) surface = makeSurface(base);
+      const mesh = state.ratio >= 0.999 ? base : reduceQuads(base, target, { surface });
+      tReduce = performance.now() - t0;
+      let uv = null;
+      if (state.autoUV) { status('Unwrapping UVs…'); await nextFrame(); t0 = performance.now(); uv = unwrap(mesh); tUV = performance.now() - t0; }
+      result = { mesh, uv, materials: materialsFor(mesh.matNames || []) };
+      simplified = null;
+      buildPolyGroup(simpGroup, result);
+      const st = faceStats(mesh); faces = st.faces; verts = st.verts; quadPct = `${((100 * st.quads) / Math.max(1, st.faces)).toFixed(1)}%`;
+    } else {
+      status(`Simplifying ${fmt(total)} triangles…`); await nextFrame();
+      simplified = simplifyParts(parts, state.ratio, state);
+      tReduce = performance.now() - t0;
+      faces = countTris(simplified); verts = countVerts(simplified);
+      if (state.autoUV) {
+        status('Unwrapping UVs…'); await nextFrame(); t0 = performance.now();
+        const mesh = polyFromParts(simplified, { pairQuads: false });
+        result = { mesh, uv: unwrap(mesh), materials: simplified.map((p) => p.material) };
+        tUV = performance.now() - t0;
+        buildPolyGroup(simpGroup, result);
+      } else { result = null; buildTriGroup(simpGroup, simplified); }
+    }
+    $('#low-faces').textContent = fmt(faces);
+    $('#low-verts').textContent = fmt(verts);
+    $('#low-quads').textContent = quadPct;
+    $('#reduction').textContent = `${(100 * (1 - faces / total)).toFixed(1)}%`;
+    const unit = state.topo === 'quads' ? 'faces' : 'tris';
+    $('#lbl-orig').textContent = `Original · ${fmt(total)} ${unit}`;
+    $('#lbl-low').textContent = `Low poly · ${fmt(faces)} ${unit}`;
+    drawUV();
+    let msg = `${baseName} · ${fmt(total)} → ${fmt(faces)} ${state.topo === 'quads' ? `faces (${quadPct} quads)` : 'triangles'} in ${ms(tReduce)}`;
+    if (result?.uv) msg += ` · UVs: ${result.uv.islands} islands, ${Math.round(coverage(result.mesh, result.uv) * 100)}% of the square, ${ms(tUV)}`;
+    if (state.topo === 'tris' && faces > Math.ceil(total * state.ratio) * 1.15 + 12) msg += ` · stopped early to keep ${state.lockBorder ? 'protected open edges' : 'UV seams / hard edges'}${state.mergeSeams ? '' : ' — try “Allow collapsing across UV seams”'}`;
+    status(msg);
+  } catch (e) {
+    console.error(e); status(`Something went wrong: ${e.message}`);
+  }
   running = false;
   if (queued) { queued = false; run(); }
+}
+
+/* ---------------- UV layout ---------------- */
+
+function paintUV(cnv, size, bg, fill, line, lw) {
+  const g = cnv.getContext('2d'); cnv.width = cnv.height = size;
+  g.fillStyle = bg; g.fillRect(0, 0, size, size);
+  if (!result?.uv) return false;
+  const { mesh, uv } = result, U = uv.uvs;
+  g.beginPath();
+  mesh.faces.forEach((f, fi) => {
+    const c = uv.corner[fi];
+    g.moveTo(U[c[0] * 2] * size, (1 - U[c[0] * 2 + 1]) * size);
+    for (let k = 1; k < f.length; k++) g.lineTo(U[c[k] * 2] * size, (1 - U[c[k] * 2 + 1]) * size);
+    g.closePath();
+  });
+  if (fill) { g.fillStyle = fill; g.fill(); }
+  g.strokeStyle = line; g.lineWidth = lw; g.stroke();
+  return true;
+}
+function drawUV() {
+  const ok = paintUV($('#uvmap'), 480, '#111114', 'rgba(232,255,90,.16)', 'rgba(232,255,90,.75)', 0.6);
+  $('#uvbox').hidden = !ok;
+  if (ok) $('#uvinfo').textContent = `${result.uv.islands} islands · ${Math.round(coverage(result.mesh, result.uv) * 100)}% of the square used`;
+}
+async function uvLayoutPNG() {
+  const c = document.createElement('canvas');
+  if (!paintUV(c, 2048, '#ffffff', null, '#000000', 1.2)) return null;
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /* ---------------- export ---------------- */
 
 async function exportOBJ(withMaterials) {
-  if (!simplified) return;
+  if (!simplified && !result) return;
   const name = ($('#name').value.trim() || `${baseName}_lowpoly`).replace(/[^\w.-]+/g, '_');
   status('Writing OBJ…'); await nextFrame();
-  const { obj, mtl, textures } = writeOBJ(simplified, name);
+  let obj, files = {}, note = '';
+  if (result) {
+    const w = writePolyOBJ(result.mesh, result.uv, result.materials, name);
+    obj = w.obj;
+    files[`${name}.mtl`] = strToU8(w.mtl);
+    if (result.uv) { const png = await uvLayoutPNG(); if (png) { files[`${name}_uv_layout.png`] = [png, { level: 0 }]; note = ' · UV layout included'; } }
+  } else {
+    const w = writeOBJ(simplified, name);
+    obj = w.obj;
+    files[`${name}.mtl`] = strToU8(w.mtl);
+    for (const { texture, path } of w.textures) files[path] = [await textureBytes(texture, path), { level: 0 }];
+    if (w.textures.length) note = ` · ${w.textures.length} texture${w.textures.length === 1 ? '' : 's'}`;
+  }
   let blob, file;
   if (withMaterials) {
-    const files = { [`${name}.obj`]: strToU8(obj), [`${name}.mtl`]: strToU8(mtl) };
-    for (const { texture, path } of textures) files[path] = [await textureBytes(texture, path), { level: 0 }];
+    files[`${name}.obj`] = strToU8(obj);
     blob = new Blob([zipSync(files, { level: 6 })], { type: 'application/zip' }); file = `${name}.zip`;
-  } else {
-    blob = new Blob([obj], { type: 'text/plain' }); file = `${name}.obj`;
-  }
+  } else { blob = new Blob([obj], { type: 'text/plain' }); file = `${name}.obj`; note = ''; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = file; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 20000);
-  status(`Saved ${file} · ${(blob.size / 1e6).toFixed(1)} MB${withMaterials ? ` · ${textures.length} texture${textures.length === 1 ? '' : 's'}` : ''} — Blender: File › Import › Wavefront (.obj)`);
+  status(`Saved ${file} · ${(blob.size / 1e6).toFixed(1)} MB${note} — Blender: File › Import › Wavefront (.obj)`);
 }
 
 /* ---------------- UI ---------------- */
@@ -273,7 +400,7 @@ const toSlider = (r) => Math.round((1000 * Math.log(r / 0.005)) / Math.log(200))
 function showRatio() {
   const pct = state.ratio * 100;
   $('#ratio-v').textContent = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
-  if (parts) $('#target').value = Math.round(countTris(parts) * state.ratio);
+  if (parts && baseStats) $('#target').value = Math.round(sourceFaces() * state.ratio);
   document.querySelectorAll('[data-pct]').forEach((b) => b.classList.toggle('on', Math.abs(+b.dataset.pct / 100 - state.ratio) < 1e-4));
 }
 function setRatio(r, go = true) {
@@ -282,16 +409,31 @@ function setRatio(r, go = true) {
   showRatio();
   if (go) run();
 }
+function setTopo(t, go = true) {
+  state.topo = t;
+  document.body.classList.toggle('quadmode', t === 'quads');
+  document.querySelectorAll('[data-topo]').forEach((b) => b.classList.toggle('on', b.dataset.topo === t));
+  $('#unit').textContent = t === 'quads' ? 'faces' : 'triangles';
+  showRatio();
+  if (go) { buildOrig(); run(); }
+}
 
 let debounce;
 $('#ratio').addEventListener('input', (e) => {
   state.ratio = toRatio(+e.target.value); showRatio();
   clearTimeout(debounce);
-  debounce = setTimeout(run, parts && countTris(parts) > 600000 ? 350 : 60);
+  const heavy = state.topo === 'quads' || state.autoUV || (parts && countTris(parts) > 600000);
+  debounce = setTimeout(run, heavy ? 450 : 60);
 });
-$('#target').addEventListener('change', (e) => parts && setRatio(+e.target.value / countTris(parts)));
+$('#target').addEventListener('change', (e) => parts && setRatio(+e.target.value / sourceFaces()));
 document.querySelectorAll('[data-pct]').forEach((b) => (b.onclick = () => setRatio(+b.dataset.pct / 100)));
-for (const id of ['lockBorder', 'prune', 'shading', 'mergeSeams']) $(`#${id}`).onchange = (e) => { state[id] = e.target.checked; run(); };
+document.querySelectorAll('[data-topo]').forEach((b) => (b.onclick = () => setTopo(b.dataset.topo)));
+for (const id of ['lockBorder', 'prune', 'shading', 'mergeSeams', 'autoUV']) $(`#${id}`).onchange = (e) => { state[id] = e.target.checked; run(); };
+document.querySelectorAll('[data-look]').forEach((b) => (b.onclick = () => {
+  state.look = b.dataset.look;
+  document.querySelectorAll('[data-look]').forEach((x) => x.classList.toggle('on', x === b));
+  if (result) buildPolyGroup(simpGroup, result);
+}));
 document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => {
   state.view = b.dataset.view;
   document.body.classList.toggle('split', state.view === 'split');
@@ -301,15 +443,22 @@ $('#wire').onchange = (e) => setWire(e.target.checked);
 $('#spin').onchange = (e) => { state.spin = e.target.checked; };
 $('#export-zip').onclick = () => exportOBJ(true);
 $('#export-obj').onclick = () => exportOBJ(false);
+$('#uv-png').onclick = async () => {
+  const png = await uvLayoutPNG(); if (!png) return;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+  a.download = `${($('#name').value.trim() || baseName).replace(/[^\w.-]+/g, '_')}_uv_layout.png`; a.click();
+};
 $('#file').onchange = (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) loadFiles(f); };
 window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('drag'); });
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('drag'); });
 window.addEventListener('drop', (e) => { e.preventDefault(); document.body.classList.remove('drag'); if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
 
+$('#autoUV').checked = state.autoUV;
+setTopo(state.topo, false);
 setRatio(state.ratio, false);
 resize();
 requestAnimationFrame(render);
 status('Drop a high-poly model to start.');
 
 // test hooks
-window.__poly = { loadFiles, setRatio, exportOBJ, get parts() { return parts; }, get simplified() { return simplified; }, state, writeOBJ };
+window.__poly = { loadFiles, setRatio, setTopo, exportOBJ, get parts() { return parts; }, get result() { return result; }, get simplified() { return simplified; }, state };

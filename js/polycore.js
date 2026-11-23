@@ -240,3 +240,44 @@ export async function textureBytes(tex, path) {
   const blob = await new Promise((r) => canvas.toBlob(r, type, 0.92));
   return new Uint8Array(await blob.arrayBuffer());
 }
+
+/* ---------- OBJ for polygon (quad) meshes ---------- */
+
+/**
+ * m: { pos, faces, fmat, matNames }, uv: result of unwrap() or null, materials: three materials by fmat index.
+ * Faces are written as-is (quads stay quads). UVs are per corner. Colours only (new UVs don't match old textures).
+ */
+export function writePolyOBJ(m, uv, materials, baseName) {
+  const used = [...new Set(m.fmat)].sort((a, b) => a - b), names = new Map(), taken = new Set();
+  for (const i of used) {
+    let n = safe(m.matNames?.[i] || materials?.[i]?.name, `material${i + 1}`), k = 2;
+    while (taken.has(n)) n = `${safe(m.matNames?.[i], 'material')}_${k++}`;
+    taken.add(n); names.set(i, n);
+  }
+  const mtl = [`# Poly Simply · ${new Date().toISOString().slice(0, 10)}`, ''];
+  for (const i of used) {
+    const mat = materials?.[i], c = (mat?.color || new THREE.Color(0.74, 0.73, 0.7)).clone().convertLinearToSRGB();
+    mtl.push(`newmtl ${names.get(i)}`, 'Ka 0.000000 0.000000 0.000000', `Kd ${f6(c.r)} ${f6(c.g)} ${f6(c.b)}`, 'Ks 0.100000 0.100000 0.100000', 'Ns 50.000000', `d ${f6(mat?.opacity ?? 1)}`, 'illum 2', '');
+  }
+  const nV = m.pos.length / 3, out = [`# Poly Simply · ${m.faces.length.toLocaleString('en-US')} faces`, `mtllib ${baseName}.mtl`, `o ${safe(baseName, 'mesh')}`];
+  const lines = new Array(nV);
+  for (let i = 0; i < nV; i++) lines[i] = `v ${f6(m.pos[i * 3])} ${f6(m.pos[i * 3 + 1])} ${f6(m.pos[i * 3 + 2])}`;
+  out.push(lines.join('\n'));
+  if (uv) {
+    const nU = uv.uvs.length / 2, vt = new Array(nU);
+    for (let i = 0; i < nU; i++) vt[i] = `vt ${f6(uv.uvs[i * 2])} ${f6(uv.uvs[i * 2 + 1])}`;
+    out.push(vt.join('\n'));
+  }
+  out.push('s 1');
+  // group faces by material so each usemtl appears once
+  for (const mi of used) {
+    out.push(`usemtl ${names.get(mi)}`);
+    const fl = [];
+    m.faces.forEach((f, fi) => {
+      if (m.fmat[fi] !== mi) return;
+      fl.push('f ' + f.map((v, k) => (uv ? `${v + 1}/${uv.corner[fi][k] + 1}` : `${v + 1}`)).join(' '));
+    });
+    out.push(fl.join('\n'));
+  }
+  return { obj: out.join('\n') + '\n', mtl: mtl.join('\n') };
+}
