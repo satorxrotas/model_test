@@ -10,6 +10,7 @@ import { POSES, bakePoses } from './poses.js';
 import { REF_MOTION } from './refmotion.js';
 import { getGarment } from './handoff.js';
 import { FIGURES, loadFigure, landmarks, morphGeometry } from './bodies.js';
+import { retargetClipFor } from './motionlib.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -172,52 +173,8 @@ async function loadRigs(id = state.figure) {
   character.updateMatrixWorld(true);
 }
 
-// World-space delta retargeting between two humanoid rigs that share bone names.
-// target_world(t) = source_world(t) * inv(source_rest_world) * target_rest_world
-function retargetClip(src, clip, fps = 30) {
-  const srcRoot = src.scene;
-  const srcBones = bonesByName(srcRoot);
-  // measure the source rest pose in T-pose when the rig ships one
-  const tpose = src.animations.find((a) => /t-?pose/i.test(a.name));
-  if (tpose) { const tm = new THREE.AnimationMixer(srcRoot); tm.clipAction(tpose).play(); tm.setTime(0); tm.stopAllAction(); tm.uncacheRoot(srcRoot); }
-  srcRoot.updateMatrixWorld(true);
-  character.updateMatrixWorld(true);
-  const order = [];
-  character.traverse((o) => { if (o.isBone) { const n = o.name.replace(/^mixamorig[:_]?/, ''); if (srcBones[n]) order.push([n, o]); } });
-  const restS = {}, restT = {};
-  for (const [n, tb] of order) { restS[n] = srcBones[n].getWorldQuaternion(new THREE.Quaternion()); restT[n] = tb.getWorldQuaternion(new THREE.Quaternion()); }
-  const W = (bs, n) => bs[n].getWorldPosition(new THREE.Vector3());
-  const srcSpan = W(srcBones, 'Neck').y - (W(srcBones, 'LeftFoot').y + W(srcBones, 'RightFoot').y) / 2;
-  const ratio = measure.span / srcSpan;
-  const hipsRestS = W(srcBones, 'Hips'), hipsRestT = W(bones, 'Hips');
-  const hipsParentInv = bones.Hips.parent.matrixWorld.clone().invert();
-
-  const smix = new THREE.AnimationMixer(srcRoot);
-  smix.clipAction(clip).play();
-  const frames = Math.max(2, Math.floor(clip.duration * fps + 1e-6) + 1);
-  const times = new Float32Array(frames);
-  const qv = Object.fromEntries(order.map(([n]) => [n, new Float32Array(frames * 4)]));
-  const pv = new Float32Array(frames * 3);
-  const worldT = {}, q = new THREE.Quaternion(), pq = new THREE.Quaternion(), v = new THREE.Vector3();
-  for (let f = 0; f < frames; f++) {
-    const t = Math.min(clip.duration, f / fps); times[f] = t;
-    smix.setTime(t); srcRoot.updateMatrixWorld(true);
-    for (const [n, tb] of order) {
-      const ws = srcBones[n].getWorldQuaternion(q);
-      const wt = (worldT[n] ||= new THREE.Quaternion()).copy(ws).multiply(restS[n].clone().invert()).multiply(restT[n]);
-      const parentName = tb.parent.isBone ? tb.parent.name.replace(/^mixamorig[:_]?/, '') : null;
-      const parentW = parentName && worldT[parentName] ? worldT[parentName] : tb.parent.getWorldQuaternion(pq);
-      const local = parentW.clone().invert().multiply(wt);
-      local.toArray(qv[n], f * 4);
-    }
-    v.copy(W(srcBones, 'Hips')).sub(hipsRestS).multiplyScalar(ratio).add(hipsRestT).applyMatrix4(hipsParentInv);
-    v.toArray(pv, f * 3);
-  }
-  smix.stopAllAction(); smix.uncacheRoot(srcRoot);
-  const tracks = order.map(([n, tb]) => new THREE.QuaternionKeyframeTrack(`${tb.name}.quaternion`, times, qv[n]));
-  tracks.push(new THREE.VectorKeyframeTrack(`${bones.Hips.name}.position`, times, pv));
-  return new THREE.AnimationClip(clip.name, clip.duration, tracks);
-}
+// World-space delta retargeting lives in motionlib.js (shared with Image to Blend)
+function retargetClip(src, clip, fps = 30) { return retargetClipFor({ src, clip, character, bones, span: measure.span, fps }); }
 
 function setMotion(id, fade = 0.45) {
   state.motion = id;

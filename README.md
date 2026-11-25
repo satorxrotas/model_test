@@ -38,6 +38,17 @@ Third tab. Upload a garment photo (flat lay or product shot); no AI service need
 4. **Describe it** (optional, `js/describe.js`): type a description such as *"high-rise flared pants, fitted, floor length"* and the words override what was measured from the photo — garment type, rise (low / mid / high), leg cut (flared, bootcut, wide, straight, skinny, joggers), fit (tight → baggy), length (shorts → floor; mini / midi / maxi), skirt shape (pencil, A-line, flowy), top length (cropped, longline) and sleeves (sleeveless → long). Recognised terms show as chips; suggestion chips add terms with a tap. Keyword based, no AI service.
 5. **Output**: *Send to Motion Studio* (IndexedDB hand-off; the studio opens on the same body and skips its auto-placement for pre-fitted garments; switching body there re-shapes the garment to the other body's proportions), *Rigged .glb* (Mixamo skeleton, skin weights from the body, texture embedded) or *OBJ (.zip)* with texture.
 
+## Image to Blend (`blend.html`)
+Fourth tab. An image in, a real `.blend` file out, written in the browser and opening directly in Blender 3.5 and newer. Tested in Blender 4.2 and 5.0; the file uses the 3.0 format, which 3.5 reads natively.
+
+- **Object**: product photo → the outline is inflated into a rounded solid (Poisson height field, sqrt profile) with the photo on the front and mirrored on the back; height, thickness, flat/rounded back, optional surface relief from the photo's brightness; Subdivision modifier.
+- **Logo**: graphic → every shape traced (marching squares, holes and islands kept), simplified, triangulated (earcut) and extruded; the front wears the artwork, sides take a colour; real Bevel modifier with auto smooth.
+- **Scene**: any picture → a picture plane or a studio sweep (wall curving onto the floor), shadeless (emission) or lit, render size and camera matched to the image.
+- **Garment**: the Image to Model pipeline (templates, women's/men's body, description) → garment with an armature built from the body's Mixamo skeleton (`mixamorig:*` bones, rest matrices computed Blender-style), vertex-group skin weights, Armature modifier, optional rigged body, and motions (reference sway, walk, idle, run, dance, model poses) baked as Blender actions.
+- Every file gets a camera framed on the model, key/fill/rim area lights (Studio / Soft / Dramatic), a matching floor and world colour, Eevee or Cycles, packed textures, and viewports set to Material Preview.
+
+How it works: `assets/blend/template.blend` is Blender's own factory-startup file from the 3.5 source tree (format 3.0, brushes removed). `js/blendfile.js` reads its SDNA (the struct catalogue every .blend carries) and reads/writes blocks by field name, keeping pointers valid by old address. `js/blendscene.js` adds meshes (legacy MVert/MEdge/MPoly/MLoop layers that every version converts on load), packed images, Principled materials with Image Texture nodes, objects, modifiers, lights and the camera. `js/blendrig.js` adds armatures, poses and actions. `js/blendgen.js` makes the geometry; `js/motionlib.js` holds the motion retargeting shared with Motion Studio.
+
 ## Files
 - `index.html` – UI
 - `js/studio.js` – scene, motions, retargeting, camera moves, recording
@@ -51,6 +62,9 @@ Third tab. Upload a garment photo (flat lay or product shot); no AI service need
 - `vendor/three/` – three.js r170 (MIT)
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
 - `vendor/three-mesh-bvh/` – three-mesh-bvh 0.9.18 (MIT)
+- `vendor/earcut/` – earcut 3.0.1 (ISC)
+- `assets/blend/template.blend` – Blender's factory startup file (Blender 3.5 source, GPL), brushes and palettes removed
+- `blend.html`, `js/img2blend.js`, `js/blendfile.js`, `js/blendscene.js`, `js/blendrig.js`, `js/blendgen.js`, `js/motionlib.js` – Image to Blend
 
 The page sits behind a client-side password gate (`js/gate.js`, stores only a SHA-256 hash). It keeps casual visitors out; the repo itself is public.
 

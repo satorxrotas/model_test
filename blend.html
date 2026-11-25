@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Image to Blend</title>
+<meta name="description" content="Turn a photo into a ready-to-open Blender file.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d0d0f; --panel: rgba(20,20,23,.96); --line: rgba(255,255,255,.08); --text: #ecebe8; --mute: #8d8b87;
+    --accent: #e8ff5a; --field: #1d1d21;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Inter Tight', system-ui, sans-serif; overflow: hidden; }
+  .tabs { height: 46px; display: flex; align-items: stretch; gap: 4px; padding: 0 14px; background: #0a0a0b; border-bottom: 1px solid var(--line); }
+  .tabs a { display: flex; align-items: center; padding: 0 14px; color: var(--mute); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; }
+  .tabs a:hover { color: var(--text); }
+  .tabs a[aria-current=page] { color: var(--text); border-bottom-color: var(--accent); }
+  #app { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 46px); }
+  main { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); }
+  .pane { position: relative; overflow: hidden; }
+  #photo-pane { display: grid; place-items: center; padding: 18px; border-right: 1px solid var(--line); background: #0f0f12; }
+  #photo { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+  body:not(.loaded) #photo { display: none; }
+  .ptitle { position: absolute; top: 12px; left: 14px; font: 500 10.5px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); }
+  #facts { font-size: 12px; color: var(--mute); margin: 8px 0 0; }
+  #facts b { color: var(--text); font-weight: 600; }
+  body:not([data-type=pants]) .pants-only, body:not([data-type=top]) .top-only { display: none; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 20px 18px 60px; }
+  .brand { font-size: 30px; font-weight: 700; letter-spacing: -.02em; line-height: 1; margin: 0 0 6px; }
+  .brand span { color: var(--accent); }
+  .sub { color: var(--mute); font-size: 12.5px; margin: 0 0 16px; }
+  section { border-top: 1px solid var(--line); padding: 14px 0 6px; }
+  h2 { font: 500 10.5px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin: 0 0 10px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 9px; }
+  .val { font: 12px 'JetBrains Mono', monospace; color: var(--text); }
+  .file { display: block; text-align: center; cursor: pointer; border: 1px dashed rgba(255,255,255,.18); border-radius: 10px; padding: 18px 12px; color: var(--mute); }
+  .file:hover { color: var(--text); border-color: var(--accent); }
+  .file b { display: block; color: var(--text); font-weight: 600; margin-bottom: 4px; }
+  .file input { display: none; }
+  .hint { color: var(--mute); font-size: 11.5px; margin: 6px 0 4px; }
+  table { width: 100%; border-collapse: collapse; font: 12px 'JetBrains Mono', monospace; }
+  th { text-align: left; color: var(--mute); font-weight: 400; padding: 4px 0; }
+  td { text-align: right; padding: 4px 0; }
+  tr.hi td { color: var(--accent); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=number], input[type=text] { width: 100%; font: 12px 'JetBrains Mono', monospace; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
+  input[type=number]:focus, input[type=text]:focus, textarea:focus { border-color: var(--accent); }
+  textarea { width: 100%; min-height: 64px; resize: vertical; font: 12.5px/1.45 'Inter Tight', sans-serif; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; }
+  #understood .chip { cursor: default; padding: 3px 9px; font-size: 11px; }
+  #suggest .chip { padding: 3px 9px; font-size: 11px; }
+  .tgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 10px; }
+  .tgrid button { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 2px 7px; background: var(--field); border: 1px solid var(--line); border-radius: 9px; color: var(--mute); font: 11.5px 'Inter Tight', sans-serif; cursor: pointer; }
+  .tgrid button:hover { border-color: rgba(255,255,255,.25); color: var(--text); }
+  .tgrid button.on { background: var(--accent); border-color: var(--accent); color: #111; }
+  .colors { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .colors .sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255,255,255,.2); background: var(--c); cursor: pointer; padding: 0; }
+  .colors input[type=color] { width: 30px; height: 24px; border: 0; padding: 0; background: none; cursor: pointer; }
+  #suggest .chip::before { content: '+ '; opacity: .6; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .chip, .seg button { font: 12px 'JetBrains Mono', monospace; color: var(--mute); background: var(--field); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; cursor: pointer; }
+  .chip.on, .seg button.on { color: #111; background: var(--accent); border-color: var(--accent); }
+  .seg { display: flex; gap: 6px; margin-bottom: 10px; }
+  .seg button { flex: 1; border-radius: 8px; padding: 7px 0; font-family: inherit; font-size: 12.5px; }
+  .check { display: flex; gap: 9px; align-items: flex-start; margin: 0 0 9px; cursor: pointer; }
+  .check input { margin: 2px 0 0; accent-color: var(--accent); }
+  .check small { display: block; color: var(--mute); font-size: 11.5px; }
+  button.primary { width: 100%; font: 600 13px 'Inter Tight', sans-serif; color: #111; background: var(--accent); border: 0; border-radius: 9px; padding: 11px; cursor: pointer; }
+  button.primary:disabled, button.link:disabled { opacity: .4; cursor: not-allowed; }
+  button.link { background: none; border: 0; color: var(--mute); text-decoration: underline; cursor: pointer; font: inherit; padding: 8px 0 0; }
+  button.link:hover { color: var(--text); }
+  body:not(.loaded) .needs-model { opacity: .45; pointer-events: none; }
+  main { position: relative; overflow: hidden; background: radial-gradient(ellipse at center, #1c1c20 0%, #0b0b0c 75%); }
+  #stage { display: block; width: 100%; height: 100%; }
+  #divider { position: absolute; top: 0; bottom: 0; width: 24px; margin-left: -12px; cursor: ew-resize; touch-action: none; }
+  #divider::before { content: ''; position: absolute; left: 11px; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .8; }
+  #divider::after { content: '⟷'; position: absolute; left: 0; top: 50%; width: 24px; height: 24px; margin-top: -12px; border-radius: 50%; background: var(--accent); color: #111; font-size: 13px; display: grid; place-items: center; }
+  .label { position: absolute; top: 14px; font: 11px 'JetBrains Mono', monospace; background: rgba(0,0,0,.55); padding: 5px 9px; border-radius: 6px; color: var(--text); }
+  #lbl-orig { left: 14px; } #lbl-low { right: 14px; color: var(--accent); }
+  body:not(.split) .label { display: none; }
+  #status { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 28px); font: 11px 'JetBrains Mono', monospace; color: var(--mute); background: rgba(0,0,0,.55); padding: 6px 10px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--mute); pointer-events: none; }
+  #empty b { display: block; font-size: 18px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
+  body.loaded #empty { display: none; }
+  body.drag main::after { content: 'Drop a garment photo'; position: absolute; inset: 14px; border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(0,0,0,.6); }
+  #uvmap { width: 100%; aspect-ratio: 1; display: block; border-radius: 8px; border: 1px solid var(--line); }
+  body.quadmode .tri-only, body:not(.quadmode) .quad-only { display: none; }
+  body:not(.autouv) .uv-opts { display: none; }
+  .seg button { padding-left: 4px; padding-right: 4px; }
+  .seg button { white-space: nowrap; }
+  .modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0 0 8px; }
+  .modes button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 2px 8px; background: var(--field); border: 1px solid var(--line); border-radius: 9px; color: var(--mute); font: 11.5px 'Inter Tight', sans-serif; cursor: pointer; }
+  .modes button svg { width: 22px; height: 22px; }
+  .modes button:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
+  .modes button.on { background: var(--accent); border-color: var(--accent); color: #111; }
+  body:not([data-mode=object]) .m-object, body:not([data-mode=logo]) .m-logo, body:not([data-mode=scene]) .m-scene, body:not([data-mode=garment]) .m-garment, body[data-mode=garment] .not-garment, body[data-mode=scene] .not-scene { display: none; }
+  .motions { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+  .motions .check { margin: 0 0 5px; }
+  /* password gate */
+  body.locked #app, body.locked .tabs { display: none; }
+  #gate { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, #1a1a1d 0%, #0b0b0c 70%); padding: 16px; }
+  #gate form { width: 100%; max-width: 320px; display: grid; gap: 10px; }
+  #gate input[type=password] { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; outline: none; }
+  #gate input[type=password]:focus { border-color: var(--accent); }
+  #gate-err { color: #ff6b62; font-size: 12px; min-height: 16px; margin: 0; }
+  #gate .shake { animation: shake .35s; }
+  @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 40vh 55vh; }
+    #photo-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+    html, body { overflow: auto; }
+    #app { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    main { order: 1; height: auto; }
+    aside { order: 2; border-right: 0; border-top: 1px solid var(--line); padding: 16px 16px 40px; overflow: visible; }
+    .tabs { overflow-x: auto; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+</head>
+<body class="locked" data-app="img2blend" data-mode="object">
+<div id="gate">
+  <form id="gate-form" autocomplete="off">
+    <p class="brand">Image <span>to Blend</span></p>
+    <p class="sub" style="margin:0 0 6px">Enter the password to continue.</p>
+    <input type="password" id="gate-pw" placeholder="Password" aria-label="Password" required>
+    <label class="row" style="margin:0"><span style="color:var(--mute)">Remember on this device</span><input type="checkbox" id="gate-remember" checked></label>
+    <button class="primary" type="submit">Enter</button>
+    <p id="gate-err" role="alert"></p>
+  </form>
+</div>
+
+<nav class="tabs" aria-label="Tools"><a href="index.html">Motion Studio</a><a href="poly.html">Poly Simplify</a><a href="image.html">Image to Model</a><a href="blend.html" aria-current="page">Image to Blend</a></nav>
+
+<div id="app">
+  <aside>
+    <h1 class="brand">Image <span>to Blend</span></h1>
+    <p class="sub">A photo in, a .blend out — model, textures, camera, lights and (for garments) a rig with motions, ready to open in Blender 3.5+.</p>
+
+    <section>
+      <h2>Make</h2>
+      <div class="modes">
+        <button data-mode="object" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3c4 0 7 3.5 7 8.5S16 21 12 21s-7-4.5-7-9.5S8 3 12 3z"/><path d="M8 9c1.5-1.5 3-2 5-1.5" opacity=".6"/></svg>Object</button>
+        <button data-mode="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></svg>Logo</button>
+        <button data-mode="scene"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/></svg>Scene</button>
+        <button data-mode="garment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3l-5 3 2 4 3-1v12h8V9l3 1 2-4-5-3c-1 2-2.5 3-4 3S9 5 8 3z"/></svg>Garment</button>
+      </div>
+      <p class="hint" id="mode-hint"></p>
+    </section>
+
+    <section class="m-garment">
+      <h2>Body</h2>
+      <div class="seg"><button data-figure="women" class="on">Women</button><button data-figure="men">Men</button></div>
+      <h2 style="margin-top:14px">Start from a template</h2>
+      <div class="tgrid" id="templates"></div>
+      <div class="colors"><span class="hint" style="margin:0 4px 0 0">Colour</span>
+        <button class="sw" data-color="#1f1f22" aria-label="Black"></button><button class="sw" data-color="#ecebe6" aria-label="White"></button><button class="sw" data-color="#9a9690" aria-label="Grey"></button><button class="sw" data-color="#3d5a80" aria-label="Denim"></button><button class="sw" data-color="#8a7f6a" aria-label="Khaki"></button><button class="sw" data-color="#3c4a3a" aria-label="Olive"></button><button class="sw" data-color="#7a2e2e" aria-label="Burgundy"></button><button class="sw" data-color="#e4b7c4" aria-label="Pink"></button>
+        <input type="color" id="tcolor" value="#3d5a80" aria-label="Custom colour"></div>
+    </section>
+
+    <section>
+      <h2 id="photo-h">Photo</h2>
+      <label class="file"><input type="file" id="file" accept="image/*"><b>Upload an image</b><span id="file-hint">Product shot on a plain background</span><br>or drop it anywhere</label>
+      <div class="not-scene">
+        <label class="row needs-model" style="margin-top:10px"><span>Background tolerance</span><span class="val" id="tolerance-v"></span></label>
+        <input class="needs-model" type="range" id="tolerance" min="0.5" max="2" step="0.05">
+      </div>
+    </section>
+
+    <section class="m-garment needs-model">
+      <h2>Describe it <span style="text-transform:none;letter-spacing:0;font-weight:400;opacity:.7">(optional)</span></h2>
+      <textarea id="describe" spellcheck="false" placeholder="e.g. high-rise flared pants, fitted, floor length"></textarea>
+      <div class="chips" id="understood"></div>
+      <div class="chips" id="suggest"></div>
+      <div class="seg"><button data-type="pants" class="on">Pants</button><button data-type="skirt">Skirt</button><button data-type="top">Top</button></div>
+      <label class="row"><span>Size</span><span class="val" id="gsize-v"></span></label><input type="range" id="gsize" min="0.8" max="1.3" step="0.01">
+      <label class="row"><span>Length</span><span class="val" id="glength-v"></span></label><input type="range" id="glength" min="0.6" max="1.4" step="0.01">
+    </section>
+
+    <section class="needs-model">
+      <h2>Shape</h2>
+      <div class="m-object">
+        <label class="row"><span>Height</span><span class="val" id="oheight-v"></span></label><input type="range" id="oheight" min="5" max="200" step="1">
+        <label class="row"><span>Thickness</span><span class="val" id="othick-v"></span></label><input type="range" id="othick" min="0.05" max="1" step="0.01">
+        <label class="row"><span>Surface detail from photo</span><span class="val" id="odetail-v"></span></label><input type="range" id="odetail" min="0" max="1" step="0.05">
+        <div class="seg" style="margin-top:6px"><button data-back="round" class="on">Rounded back</button><button data-back="flat">Flat back</button></div>
+        <p class="hint">Inflated from the outline: rounded edges, the photo on the front and mirrored on the back.</p>
+      </div>
+      <div class="m-logo">
+        <label class="row"><span>Width</span><span class="val" id="lwidth-v"></span></label><input type="range" id="lwidth" min="5" max="300" step="1">
+        <label class="row"><span>Depth</span><span class="val" id="ldepth-v"></span></label><input type="range" id="ldepth" min="1" max="200" step="1">
+        <label class="row"><span>Bevel</span><span class="val" id="lbevel-v"></span></label><input type="range" id="lbevel" min="0" max="10" step="0.5">
+        <div class="colors" style="margin-top:4px"><span class="hint" style="margin:0 4px 0 0">Sides</span><input type="color" id="lside" value="#2a2a2e" aria-label="Side colour"><button class="link" id="lside-auto" style="padding:0">match logo</button></div>
+        <p class="hint">Traced from the outline (holes kept), extruded, with a real Bevel modifier you can tweak in Blender.</p>
+      </div>
+      <div class="m-scene">
+        <div class="seg"><button data-layout="flat" class="on">Flat picture</button><button data-layout="sweep">Studio sweep</button></div>
+        <label class="row"><span>Picture height</span><span class="val" id="sheight-v"></span></label><input type="range" id="sheight" min="0.5" max="6" step="0.1">
+        <label class="check"><input type="checkbox" id="sglow" checked><span>Shadeless<small>The picture renders exactly as the photo (emission). Off: lit like a print.</small></span></label>
+      </div>
+      <div class="m-garment">
+        <label class="check"><input type="checkbox" id="gbody"><span>Include the body<small>Rigged too. The women's body has its own wide trousers, which can show through tight garments</small></span></label>
+        <h2 style="margin-top:12px">Motions <span style="text-transform:none;letter-spacing:0;font-weight:400;opacity:.7">(Blender actions)</span></h2>
+        <div class="motions" id="motions"></div>
+      </div>
+      <p id="facts" class="hint"></p>
+    </section>
+
+    <section class="needs-model">
+      <h2>Blender scene</h2>
+      <div class="seg"><button data-engine="BLENDER_EEVEE" class="on">Eevee</button><button data-engine="CYCLES">Cycles</button></div>
+      <div class="seg"><button data-light="studio" class="on">Studio</button><button data-light="soft">Soft</button><button data-light="dramatic">Dramatic</button></div>
+      <div class="colors" style="margin-bottom:8px"><span class="hint" style="margin:0 4px 0 0">Backdrop</span>
+        <button class="sw" data-bg="#d8d4cd"></button><button class="sw" data-bg="#efebe4"></button><button class="sw" data-bg="#c7cdd4"></button><button class="sw" data-bg="#1b1b1d"></button><button class="sw" data-bg="#0a0a0a"></button>
+        <input type="color" id="bg" value="#d8d4cd" aria-label="Backdrop colour"></div>
+      <label class="check not-scene"><input type="checkbox" id="floor" checked><span>Floor<small>Catches shadows; matches the backdrop</small></span></label>
+    </section>
+
+    <section class="needs-model">
+      <h2>Download</h2>
+      <label class="row" style="display:block"><span style="display:block;margin-bottom:6px">File name</span><input type="text" id="name" spellcheck="false"></label>
+      <button class="primary" id="download">Download .blend</button>
+      <p class="hint">Opens straight in Blender 3.5 and newer (File › Open). Textures are packed inside the file; viewports open in Material Preview.</p>
+    </section>
+  </aside>
+
+  <main>
+    <div class="pane" id="photo-pane"><span class="ptitle">Photo · cut-out</span><canvas id="photo"></canvas></div>
+    <div class="pane"><span class="ptitle">3D preview</span><canvas id="stage" style="display:block;width:100%;height:100%"></canvas>
+      <div id="empty"><div><b>Drop an image</b><span id="empty-hint">Product photo, logo, any picture, or a garment</span></div></div>
+      <div id="status">Loading…</div>
+    </div>
+  </main>
+</div>
+<script type="module" src="js/gate.js"></script>
+</body>
+</html>

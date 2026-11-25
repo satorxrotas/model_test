@@ -5,14 +5,14 @@ import * as THREE from 'three';
 /* ======================= 1. cut-out ======================= */
 
 // Background = whatever is connected to the image border and close to the border's colours.
-export function cutout(img, { tolerance = 1, bgColor = null } = {}) {
+export function cutout(img, { tolerance = 1, bgColor = null, keepAll = false } = {}) {
   const { width: w, height: h, data } = img, n = w * h;
   // transparent PNGs: use the alpha channel directly
   let transparent = 0; for (let i = 3; i < data.length; i += 4 * 7) if (data[i] < 200) transparent++;
   if (transparent > n / 7 * 0.05) {
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) mask[i] = data[i * 4 + 3] > 128 ? 1 : 0;
-    return finish(mask, w, h);
+    return finish(mask, w, h, keepAll);
   }
   // border samples, clustered: the garment often fills much of the frame (tight crops, a waistband at the
   // top, another item at the side), so we can't assume the border is all background
@@ -55,7 +55,7 @@ export function cutout(img, { tolerance = 1, bgColor = null } = {}) {
     for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
     while (qh < qt) { const i = q[qh++], x = i % w, y = (i / w) | 0; if (x > 0) push(i - 1); if (x < w - 1) push(i + 1); if (y > 0) push(i - w); if (y < h - 1) push(i + w); }
     const mask = new Uint8Array(n); for (let i = 0; i < n; i++) mask[i] = bg[i] ? 0 : 1;
-    const res = finish(mask, w, h);
+    const res = finish(mask, w, h, keepAll);
     // score: area in a sensible range, centred, little of the frame covered
     let on = 0, cx = 0, cy = 0, edge = 0;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (res.mask[y * w + x]) { on++; cx += x; cy += y; if (x < b || y < b || x >= w - b || y >= h - b) edge++; }
@@ -67,8 +67,16 @@ export function cutout(img, { tolerance = 1, bgColor = null } = {}) {
   return best || finish(new Uint8Array(n), w, h);
 }
 
-function finish(mask, w, h) {
-  let m = morph(mask, w, h, 2, false); m = morph(m, w, h, 2, true); // open: drop specks
+function finish(mask, w, h, keepAll = false) {
+  let m;
+  if (keepAll) { // logos / graphics: every piece counts (letters, dots), only specks go
+    m = morph(morph(mask, w, h, 1, false), w, h, 1, true);
+    m = dropSmall(m, w, h, Math.max(12, m.length * 0.0002));
+    let x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (m[y * w + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return { mask: m, w, h, bbox: x1 < 0 ? null : { x0, y0, x1, y1 } };
+  }
+  m = morph(mask, w, h, 2, false); m = morph(m, w, h, 2, true); // open: drop specks
   m = largest(m, w, h);
   m = morph(m, w, h, 3, true); m = morph(m, w, h, 3, false);       // close: fill nicks
   let x0 = w, y0 = h, x1 = -1, y1 = -1;
@@ -87,6 +95,17 @@ function morph(m, w, h, r, dilate) {
     let v = dilate ? 0 : 1;
     for (let d = -r; d <= r; d++) { const yy = Math.min(h - 1, Math.max(0, y + d)), s = tmp[yy * w + x]; if (dilate ? s : !s) { v = dilate ? 1 : 0; break; } }
     out[y * w + x] = v;
+  }
+  return out;
+}
+
+function dropSmall(m, w, h, minN) {
+  const lab = new Int32Array(m.length).fill(-1), q = new Int32Array(m.length), out = new Uint8Array(m.length);
+  for (let s = 0; s < m.length; s++) {
+    if (!m[s] || lab[s] >= 0) continue;
+    let qh = 0, qt = 0; q[qt++] = s; lab[s] = s;
+    while (qh < qt) { const i = q[qh++], x = i % w; for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) if (j >= 0 && j < m.length && m[j] && lab[j] < 0) { lab[j] = s; q[qt++] = j; } }
+    if (qt >= minN) for (let k = 0; k < qt; k++) out[q[k]] = 1;
   }
   return out;
 }
