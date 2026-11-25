@@ -57,7 +57,7 @@ const state = {
   format: '9x16', motion: 'p_ref', camera: 'reference', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
-  partColors: {}, figure: 'women', kind: 'auto',
+  partColors: {}, figure: 'women', kind: (() => { try { return localStorage.getItem('gms-kind') || 'auto'; } catch { return 'auto'; } })(),
 };
 
 /* ---------------- renderer / scene ---------------- */
@@ -450,7 +450,7 @@ function bindUI() {
   setBg(state.bg);
 
   $('#fit-kind').value = state.kind;
-  $('#fit-kind').onchange = (e) => { state.kind = e.target.value; rebuildGarment(); };
+  $('#fit-kind').onchange = (e) => { state.kind = e.target.value; try { localStorage.setItem('gms-kind', state.kind); } catch { /* private mode */ } rebuildGarment(); };
   const fitInputs = [['scale', 'x', 2], ['lift', 'cm', 100], ['depth', 'cm', 100], ['clearance', 'mm', 1000]];
   for (const [k, unit, mul] of fitInputs) {
     const el = $(`#fit-${k}`), out = $(`#fit-${k}v`);
