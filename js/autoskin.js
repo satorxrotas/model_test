@@ -167,23 +167,42 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     }
   });
   const legGap = lowL.length && lowR.length ? Math.min(...lowL.map((v) => v.x)) - Math.max(...lowR.map((v) => v.x)) : -1;
-  const hasLegs = legGap > rawH * 0.02;
+  // two clusters at the bottom are legs only if they join well above the hem (A-posed sleeves can hang below a top's hem)
+  let hasLegs = legGap > rawH * 0.02, crotch = 0;
+  if (legGap > 0) {
+    const band = Math.max(legGap * 0.25, (raw.max.x - raw.min.x) * 0.01); let lo = Infinity;
+    for (let k = 0; k < all.length; k += 2) { const v = P(all[k], all[k + 1]); if (Math.abs(v.x - midX) < band && v.y < lo) lo = v.y; }
+    crotch = (lo - raw.min.y) / rawH; // pants ≈ 0.7, full outfit ≈ 0.45, a top ≈ 0
+    hasLegs = hasLegs && crotch > 0.2;
+  }
+
+  // What is it? auto | full (collar → ankle) | top | bottom
+  const units = [1, 0.01, 0.001, 0.0254];
+  const sizeU = units.find((k) => rawH * k >= 0.2 && rawH * k <= 2.1) ?? 1; // most plausible unit for the garment's height
+  let kind = opts.kind || 'auto';
+  if (kind === 'auto') {
+    if (hasLegs) kind = crotch > 0.6 || rawH * sizeU < 1.15 ? 'bottom' : 'full';
+    else {
+      // no legs: a skirt flares from a narrow waistband; a top is at least as wide at the shoulders/sleeves as at the hem
+      const width = (y0, y1) => { let a = Infinity, b = -Infinity; for (let k = 0; k < all.length; k += 2) { const v = P(all[k], all[k + 1]); if (v.y >= y0 && v.y <= y1) { a = Math.min(a, v.x); b = Math.max(b, v.x); } } return b - a; };
+      const topW = width(raw.max.y - rawH * 0.1, raw.max.y), botW = width(raw.min.y, raw.min.y + rawH * 0.1);
+      kind = crotch < 0.03 && topW < botW * 0.85 && rawH * sizeU < 1.1 ? 'bottom' : 'top';
+    }
+  }
 
   // Scale + vertical placement
+  const groundY = footY - span * 0.06, toBody = (neck.y - groundY) / 1.45; // real-world size, as if modelled on a ~1.70 m avatar
+  const waistY = hips.y - span * 0.02, collarY = neck.y + span * 0.035;
   let s, ty;
-  if (hasLegs) {
+  if (kind === 'full') {
     // garment spans collar -> ankle: map onto neck -> foot
-    const topY = neck.y + span * 0.035, botY = footY - span * 0.012;
-    s = (topY - botY) / rawH;
-    s *= opts.scale;
+    const botY = footY - span * 0.012;
+    s = ((collarY - botY) / rawH) * opts.scale;
     ty = botY - raw.min.y * s;
   } else {
-    // unknown coverage: guess units, assume modelled on a ~1.70 m avatar with feet at y=0
-    const units = [1, 0.01, 0.001, 0.0254];
-    const u = units.find((k) => raw.max.y * k > 0.25 && raw.max.y * k < 2.3) ?? 1;
-    const groundY = footY - span * 0.06;
-    s = u * ((neck.y - groundY) / 1.45) * opts.scale;
-    ty = groundY;
+    // a top or bottoms on its own: real-world size from its units, top edge on the collar (tops) or the waist (bottoms)
+    s = sizeU * toBody * opts.scale;
+    ty = (kind === 'top' ? collarY : waistY) - raw.max.y * s;
   }
 
   // Horizontal alignment using the torso band
@@ -219,7 +238,7 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     for (let i = 0; i < pos.count; i++) {
       const v = _v1.fromBufferAttribute(pos, i), dx = v.x - hips.x;
       if (Math.abs(dx) > maxX * 0.9 && Math.abs(dx) > shoulderW * 0.9)(dx > 0 ? cuffL : cuffR).push(v.clone());
-      if (hasLegs && v.y < fb.min.y + fH * 0.04) (dx > 0 ? hemL : hemR).push(v.clone());
+      if (hasLegs && kind !== 'top' && v.y < fb.min.y + fH * 0.04) (dx > 0 ? hemL : hemR).push(v.clone());
     }
   });
   const cL = centroid(cuffL), cR = centroid(cuffR), hL = centroid(hemL), hR = centroid(hemR);
@@ -337,5 +356,5 @@ export function fitGarment({ character, bodyMesh, bones, restPose, parts, opts }
     return g;
   });
 
-  return { geometries, skeleton, bindPose, info: { hasLegs, scale: opts.prefit ? 1 : s, sleeves: !!(cL && cR), vertices: nW } };
+  return { geometries, skeleton, bindPose, info: { hasLegs, kind, scale: opts.prefit ? 1 : s, sleeves: !!(cL && cR), vertices: nW } };
 }

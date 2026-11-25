@@ -50,13 +50,14 @@ const CAMERAS = [
   { id: 'free', label: 'Free (drag to orbit)' },
 ];
 
+const KIND_LABEL = { top: 'a top', bottom: 'bottoms', full: 'a full outfit' };
 const BACKGROUNDS = ['#d8d4cd', '#efebe4', '#1b1b1d', '#0a0a0a', '#c7cdd4', '#e7d9cf', '#00b140'];
 
 const state = {
   format: '9x16', motion: 'p_ref', camera: 'reference', speed: 1, camSpeed: 1,
   body: 'invisible', bg: BACKGROUNDS[0], floorShadow: true,
   fit: { scale: 1, lift: 0, depth: 0, clearance: 0.006 },
-  partColors: {}, figure: 'women',
+  partColors: {}, figure: 'women', kind: 'auto',
 };
 
 /* ---------------- renderer / scene ---------------- */
@@ -231,7 +232,7 @@ function rebuildGarment() {
   if (garment) { scene.remove(garment); garment.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); }); }
   const t0 = performance.now();
   // push-out only matters when the body is visible; otherwise keep the garment's exact shape
-  const opts = { ...state.fit, prefit: state.prefit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
+  const opts = { ...state.fit, kind: state.kind, prefit: state.prefit, clearance: state.body === 'mannequin' ? state.fit.clearance : -1 };
   const res = fitGarment({ character, bodyMesh, bones, restPose, parts: garmentParts, opts });
   bindPose = res.bindPose;
   garmentSkeleton = res.skeleton;
@@ -247,7 +248,7 @@ function rebuildGarment() {
   scene.add(garment);
   setMotion(was, 0);
   const ms = Math.round(performance.now() - t0);
-  status(`${garmentName} · ${res.info.vertices.toLocaleString()} verts · fitted in ${ms} ms${res.info.sleeves || state.prefit ? '' : ' · no sleeves detected'}${res.info.hasLegs || state.prefit ? '' : ' · no legs detected'}`);
+  status(`${garmentName} · ${res.info.vertices.toLocaleString()} verts · fitted in ${ms} ms${state.prefit ? '' : ` · fitted as ${KIND_LABEL[res.info.kind]}${state.kind === 'auto' ? ' (auto)' : ''}`}${res.info.sleeves || state.prefit || res.info.kind === 'bottom' ? '' : ' · no sleeves detected'}`);
   window.__fitInfo = res.info;
 }
 
@@ -448,6 +449,8 @@ function bindUI() {
   $('#bgcustom').oninput = (e) => setBg(e.target.value);
   setBg(state.bg);
 
+  $('#fit-kind').value = state.kind;
+  $('#fit-kind').onchange = (e) => { state.kind = e.target.value; rebuildGarment(); };
   const fitInputs = [['scale', 'x', 2], ['lift', 'cm', 100], ['depth', 'cm', 100], ['clearance', 'mm', 1000]];
   for (const [k, unit, mul] of fitInputs) {
     const el = $(`#fit-${k}`), out = $(`#fit-${k}v`);
