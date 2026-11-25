@@ -195,3 +195,20 @@ export function addPose(S, ob, spec, arm) {
   f.addData(ob, [pose, ...chans]);
   return pose;
 }
+
+// plain object action: curves = [{ path: 'location', index: 0, values: Float32Array(frames) }]
+export function addObjectAction(S, ob, name, curves, frames) {
+  const f = S.f, ac = f.alloc('bAction', 1, 'AC\0\0');
+  f.set(ac, 'id.name', S.unique('AC', name)).set(ac, 'id.us', 1).set(ac, 'idroot', 0);
+  const bez = f.struct('BezTriple').size, vo = f.locate('BezTriple', 'vec').off, io = f.locate('BezTriple', 'ipo').off, h1 = f.locate('BezTriple', 'h1').off, h2 = f.locate('BezTriple', 'h2').off;
+  const out = [], fcs = [];
+  for (const c of curves) {
+    const fc = f.alloc('FCurve'), bt = f.alloc('BezTriple', frames), rp = f.raw(new TextEncoder().encode(c.path + '\0')), dv = new DataView(bt.data.buffer);
+    for (let k = 0; k < frames; k++) { const o = k * bez; for (let h = 0; h < 3; h++) { dv.setFloat32(o + vo + h * 12, k + 1 + (h - 1) / 3, true); dv.setFloat32(o + vo + h * 12 + 4, c.values[k], true); } bt.data[o + io] = 1; bt.data[o + h1] = 5; bt.data[o + h2] = 5; }
+    f.set(fc, 'bezt', bt).set(fc, 'totvert', frames).set(fc, 'rna_path', rp).set(fc, 'array_index', c.index).set(fc, 'flag', 1 | 4);
+    fcs.push(fc); out.push(fc, bt, rp);
+  }
+  f.linkList(ac, 'curves', fcs); f.add([ac, ...out]);
+  f.set(ac, 'id.us', 0); setAction(S, ob, ac); f.set(ac, 'id.us', 1);
+  return ac;
+}

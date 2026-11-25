@@ -10,7 +10,9 @@ import { FIGURES, loadFigure } from './bodies.js';
 import { TEMPLATES, drawTemplate, templateIcon } from './templates.js';
 import { inflate, logo, picture, yUpToZUp, cornerUV } from './blendgen.js';
 import { BlendScene } from './blendscene.js';
-import { addArmature, addAction, setAction, skeletonBones, bakeClip, addPose } from './blendrig.js';
+import { addArmature, addAction, setAction, skeletonBones, bakeClip, addPose, addObjectAction } from './blendrig.js';
+import { estimateDepth, resampleDepth } from './depth.js';
+import { reconstruct, fillTexture } from './scene3d.js';
 import { buildMotions, POSES } from './motionlib.js';
 
 const $ = (s) => document.querySelector(s);
@@ -19,7 +21,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeou
 const MODES = {
   object: { hint: 'Product or object photo → a rounded 3D object wearing the photo.', file: 'Product shot on a plain background', empty: 'Product photo on a plain background' },
   logo: { hint: 'Logo or graphic → an extruded, bevelled 3D logo in its own colours.', file: 'Logo / graphic — PNG with transparency is best', empty: 'Logo or graphic (transparent PNG is best)' },
-  scene: { hint: 'Any picture → a framed Blender scene: picture plane or studio sweep, camera matched to the image.', file: 'Any picture', empty: 'Any picture' },
+  scene: { hint: 'Any photo → rebuilt as a 3D scene: depth from an AI model, separate objects, backdrop filled in behind them, camera at the photo\'s viewpoint.', file: 'Any photo — rooms, streets, people, products', empty: 'Any photo' },
   garment: { hint: 'Garment photo or template → rigged garment on the Motion Studio body, with motions as Blender actions.', file: 'Garment flat lay or product shot', empty: 'Garment photo — or pick a template' },
 };
 const MOTION_LIST = [['p_ref', 'Reference sway', true], ['walk', 'Walk', true], ['idle', 'Idle', false], ['run', 'Run', false], ['samba', 'Dance', false], ['p_shift', 'Weight shift', false], ['p_hippop', 'Hip pop', false], ['p_handhip', 'Hand on hip', false], ['p_twist', 'Slow twist', false], ['p_lean', 'Lean back', false]];
@@ -27,11 +29,11 @@ const state = {
   mode: 'object', tolerance: 1, name: 'model',
   oheight: 30, othick: 0.35, odetail: 0, back: 'round',
   lwidth: 30, ldepth: 20, lbevel: 1.5, lside: null,
-  layout: 'flat', sheight: 2, sglow: true,
+  layout: '3d', sheight: 2, sglow: true, lens: 26, near: 1.5, range: 6, sep: 1, detail: 240, thick: 0.35, cammove: true,
   type: 'pants', gsize: 1, glength: 1, desc: {}, figure: 'women', template: null, templateDesc: {}, color: null,
   engine: 'BLENDER_EEVEE', light: 'studio', bg: '#d8d4cd', floor: true,
 };
-let srcCanvas, cut, tex, model, mesh, texture, template;
+let srcCanvas, cut, tex, model, mesh, texture, texture2, template, depthRaw = null;
 let figs = {}, character, bodyMesh, bodyMeshes = [], bones, restPose, restPoses = {}, body, garment, meas;
 
 /* ---------- 3D preview ---------- */
@@ -73,7 +75,7 @@ function frameView(box) {
 /* ---------- input ---------- */
 async function loadImage(file) {
   status(`Reading ${file.name}…`);
-  state.template = null; state.templateDesc = {}; renderTemplates();
+  state.template = null; state.templateDesc = {}; renderTemplates(); depthRaw = null;
   state.name = file.name.replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_') || 'model';
   const img = await createImageBitmap(file);
   const k = Math.min(1, 1600 / Math.max(img.width, img.height));
@@ -121,7 +123,8 @@ async function build() {
   status('Building…'); await nextFrame();
   try {
     if (mesh) { scene.remove(mesh); mesh.traverse((o) => o.geometry?.dispose()); mesh = null; }
-    if (texture) texture.dispose();
+    if (texture) texture.dispose(); if (texture2) { texture2.dispose(); texture2 = null; }
+    grid.visible = true; camera.fov = 30;
     let geo, info;
     if (state.mode === 'object') {
       const img = srcCanvas.getContext('2d').getImageData(0, 0, srcCanvas.width, srcCanvas.height);
@@ -132,6 +135,8 @@ async function build() {
       model = logo(cut, tex.crop, { width: state.lwidth / 100, depth: state.ldepth / 1000 });
       texture = new THREE.CanvasTexture(tex.canvas); geo = previewGeometry(model);
       info = `${model.faces.length.toLocaleString()} faces · ${cm(model.size[0])} × ${cm(model.size[2])} · ${state.ldepth} mm deep`;
+    } else if (state.mode === 'scene' && state.layout === '3d') {
+      return build3d();
     } else if (state.mode === 'scene') {
       const aspect = srcCanvas.width / srcCanvas.height;
       model = picture(aspect, { height: state.sheight, layout: state.layout });
@@ -161,6 +166,28 @@ async function build() {
     status(`${state.name}: ready — download the .blend when you're happy.`);
   } catch (e) { console.error(e); status(`Couldn't build it: ${e.message}`); }
 }
+// photo → depth → 3D scene preview (camera starts at the photo's viewpoint)
+async function build3d() {
+  if (!depthRaw) depthRaw = await estimateDepth(srcCanvas, status);
+  status('Building the 3D scene…'); await nextFrame();
+  const aspect = srcCanvas.width / srcCanvas.height, gw = aspect >= 1 ? state.detail : Math.round(state.detail * aspect), gh = aspect >= 1 ? Math.round(state.detail / aspect) : state.detail;
+  const rec = reconstruct({ disp: resampleDepth(depthRaw, gw, gh), gw, gh, photo: srcCanvas, lens: state.lens, near: state.near, range: state.range, separation: state.sep, thickness: state.thick });
+  const fillCanvas = fillTexture(srcCanvas, rec);
+  model = { rec, fillCanvas };
+  texture = new THREE.CanvasTexture(srcCanvas); texture2 = new THREE.CanvasTexture(fillCanvas);
+  for (const t of [texture, texture2]) { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; }
+  const M = (map) => (state.sglow ? new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide }) : new THREE.MeshStandardMaterial({ map, roughness: 0.8, side: THREE.DoubleSide }));
+  mesh = new THREE.Group();
+  for (const L of rec.layers) mesh.add(new THREE.Mesh(previewGeometry(L), M(L.image === 'fill' ? texture2 : texture)));
+  scene.add(mesh); grid.visible = false;
+  if (character) character.visible = false;
+  // look from the photo's camera (Blender origin, looking +Y → three.js −Z)
+  camera.fov = (2 * Math.atan(rec.ty) * 180) / Math.PI; camera.near = 0.02; camera.far = rec.far * 4; camera.updateProjectionMatrix();
+  controls.target.set(0, 0, -rec.medianZ); camera.position.set(0, 0, 0.001);
+  $('#facts').innerHTML = `<b>${rec.objects} object${rec.objects === 1 ? '' : 's'}</b> + backdrop · depth ${rec.near.toFixed(1)}–${rec.far.toFixed(1)} m · ${state.lens} mm lens · drag to look around`;
+  status(`${state.name}: 3D scene ready — orbit to check it, then download the .blend.`);
+}
+
 const cm = (m) => (m >= 1 ? `${m.toFixed(2)} m` : `${Math.round(m * 100)} cm`);
 function cornerSubset(m, mat) { const out = []; let c = 0; m.faces.forEach((f, i) => { if ((m.faceMat[i] ? 1 : 0) === mat) for (let k = 0; k < f.length; k++) out.push(m.uv[(c + k) * 2], m.uv[(c + k) * 2 + 1]); c += f.length; }); return out; }
 
@@ -250,6 +277,8 @@ async function exportBlend() {
       if (state.mode === 'logo') autoSmooth(S, me);
       S.object(name, me, { modifiers: mods });
       box = bounds(model.pos); aspect = 16 / 9;
+    } else if (state.mode === 'scene' && state.layout === '3d') {
+      return finish3d(S, name, bg, btn);
     } else if (state.mode === 'scene') {
       const img = S.image(name, await canvasBytes(srcCanvas, 'image/jpeg', 0.92), { ext: 'jpg', width: srcCanvas.width, height: srcCanvas.height });
       const mat = S.material(name, state.sglow ? { image: img, color: [0, 0, 0], emission: 1, roughness: 1, specular: 0 } : { image: img, roughness: 0.6 });
@@ -279,6 +308,44 @@ async function exportBlend() {
     return bytes;
   } catch (e) { console.error(e); status(`Couldn't write the .blend: ${e.message}`); }
   finally { btn.disabled = false; }
+}
+
+// the reconstructed scene: backdrop + objects, camera at the photo's viewpoint (+ an optional slow move)
+async function finish3d(S, name, bg, btn) {
+  const { rec, fillCanvas } = model, f = S.f;
+  const photo = S.image(`${name}_photo`, await canvasBytes(srcCanvas, 'image/jpeg', 0.92), { ext: 'jpg', width: srcCanvas.width, height: srcCanvas.height });
+  const fill = S.image(`${name}_backdrop`, await canvasBytes(fillCanvas, 'image/jpeg', 0.9), { ext: 'jpg', width: fillCanvas.width, height: fillCanvas.height });
+  const mk = (n, img) => { const m = S.material(n, state.sglow ? { image: img, color: [0, 0, 0], emission: 1, roughness: 1, specular: 0 } : { image: img, roughness: 0.8, specular: 0.2 }); if (state.sglow) emissionOnly(S, m); return m; };
+  const mPhoto = mk(`${name}_photo`, photo), mFill = mk(`${name}_backdrop`, fill);
+  let box = null;
+  for (const L of rec.layers) {
+    const me = S.mesh(L.name, { positions: L.pos, faces: L.faces, uvs: L.uv, materials: [L.image === 'fill' ? mFill : mPhoto], smooth: true });
+    S.object(L.name, me);
+    const b = boundsOf(L.pos); box = box ? [box[0].map((v, k) => Math.min(v, b[0][k])), box[1].map((v, k) => Math.max(v, b[1][k]))] : b;
+  }
+  const aspect = srcCanvas.width / srcCanvas.height, W = aspect >= 1 ? 1920 : Math.round(1920 * aspect), H = aspect >= 1 ? Math.round(1920 / aspect) : 1920;
+  S.setRender({ width: W, height: H, engine: state.engine, fps: 30, frames: state.cammove ? 150 : 1 });
+  S.setCamera({ loc: [0, 0, 0], rot: [Math.PI / 2, 0, 0], lens: state.lens, clipEnd: rec.far * 6 });
+  if (state.sglow) f.set(S.scene, 'view_settings.view_transform', 'Standard'); // the photo's own colours
+  if (state.cammove) {
+    // slow 5 s loop: drift side to side and ease in, always aimed at the middle of the scene
+    const N = 150, A = rec.medianZ * 0.07, T = [0, rec.medianZ, 0], cur = { lx: [], ly: [], lz: [], rx: [], rz: [] };
+    for (let k = 0; k < N; k++) {
+      const t = k / N, p = [A * Math.sin(2 * Math.PI * t), A * 0.8 * (1 - Math.cos(2 * Math.PI * t)) / 2, A * 0.25 * Math.sin(4 * Math.PI * t)];
+      const d = [T[0] - p[0], T[1] - p[1], T[2] - p[2]];
+      cur.lx.push(p[0]); cur.ly.push(p[1]); cur.lz.push(p[2]);
+      cur.rx.push(Math.PI / 2 + Math.atan2(d[2], Math.hypot(d[0], d[1]))); cur.rz.push(Math.atan2(-d[0], d[1]));
+    }
+    addObjectAction(S, S.camera, 'Camera move', [['location', 0, cur.lx], ['location', 1, cur.ly], ['location', 2, cur.lz], ['rotation_euler', 0, cur.rx], ['rotation_euler', 2, cur.rz]].map(([path, index, v]) => ({ path, index, values: Float32Array.from(v) })), N);
+  }
+  lighting(S, box);
+  S.setWorld(bg, 0.6);
+  S.viewportMaterialPreview();
+  const bytes = S.bytes();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/x-blender' })); a.download = `${name}.blend`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  status(`Saved ${name}.blend · ${(bytes.length / 1e6).toFixed(1)} MB — open it in Blender 3.5+ and press Numpad 0 to look through the camera.`);
+  btn.disabled = false;
+  return bytes;
 }
 
 // flat caps + smooth bevels: Blender 3.x auto smooth (4.1+ converts it to "Smooth by Angle")
@@ -387,20 +454,22 @@ function setMode(m) {
   if (srcCanvas) process();
 }
 document.querySelectorAll('.modes [data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
-const fmt = { oheight: (v) => `${v} cm`, othick: (v) => `${Math.round(v * 100)}%`, odetail: (v) => (v ? `${Math.round(v * 100)}%` : 'off'), lwidth: (v) => `${v} cm`, ldepth: (v) => `${v} mm`, lbevel: (v) => (v ? `${v} mm` : 'off'), sheight: (v) => `${v.toFixed(1)} m`, gsize: (v) => `${Math.round(v * 100)}%`, glength: (v) => `${Math.round(v * 100)}%`, tolerance: (v) => `${v.toFixed(2)}×` };
+const fmt = { oheight: (v) => `${v} cm`, othick: (v) => `${Math.round(v * 100)}%`, odetail: (v) => (v ? `${Math.round(v * 100)}%` : 'off'), lwidth: (v) => `${v} cm`, ldepth: (v) => `${v} mm`, lbevel: (v) => (v ? `${v} mm` : 'off'), sheight: (v) => `${v.toFixed(1)} m`, gsize: (v) => `${Math.round(v * 100)}%`, glength: (v) => `${Math.round(v * 100)}%`, lens: (v) => `${v} mm`, near: (v) => `${v.toFixed(1)} m`, range: (v) => `${v.toFixed(1)}×`, sep: (v) => `${v.toFixed(2)}×`, detail: (v) => `${v}`, thick: (v) => (v ? `${Math.round(v * 100)}%` : 'flat'), tolerance: (v) => `${v.toFixed(2)}×` };
 let deb;
 for (const k of Object.keys(fmt)) {
   const el = $(`#${k}`); el.value = state[k]; $(`#${k}-v`).textContent = fmt[k](state[k]);
   el.oninput = () => { state[k] = +el.value; $(`#${k}-v`).textContent = fmt[k](state[k]); clearTimeout(deb); deb = setTimeout(() => (k === 'tolerance' ? process() : build()), 200); };
 }
 document.querySelectorAll('[data-back]').forEach((b) => (b.onclick = () => { state.back = b.dataset.back; document.querySelectorAll('[data-back]').forEach((x) => x.classList.toggle('on', x === b)); build(); }));
-document.querySelectorAll('[data-layout]').forEach((b) => (b.onclick = () => { state.layout = b.dataset.layout; document.querySelectorAll('[data-layout]').forEach((x) => x.classList.toggle('on', x === b)); build(); }));
+document.querySelectorAll('[data-layout]').forEach((b) => (b.onclick = () => { state.layout = b.dataset.layout; document.body.dataset.layout = state.layout; document.querySelectorAll('[data-layout]').forEach((x) => x.classList.toggle('on', x === b)); build(); }));
+document.body.dataset.layout = state.layout;
 document.querySelectorAll('[data-engine]').forEach((b) => (b.onclick = () => { state.engine = b.dataset.engine; document.querySelectorAll('[data-engine]').forEach((x) => x.classList.toggle('on', x === b)); }));
 document.querySelectorAll('[data-light]').forEach((b) => (b.onclick = () => { state.light = b.dataset.light; document.querySelectorAll('[data-light]').forEach((x) => x.classList.toggle('on', x === b)); }));
 document.querySelectorAll('[data-type]').forEach((b) => (b.onclick = () => setType(b.dataset.type)));
 document.querySelectorAll('[data-bg]').forEach((b) => { b.style.setProperty('--c', b.dataset.bg); b.onclick = () => { state.bg = b.dataset.bg; $('#bg').value = b.dataset.bg; }; });
 $('#bg').oninput = (e) => { state.bg = e.target.value; };
 $('#sglow').onchange = (e) => { state.sglow = e.target.checked; build(); };
+$('#cammove').onchange = (e) => { state.cammove = e.target.checked; };
 $('#floor').onchange = (e) => { state.floor = e.target.checked; };
 $('#lside').oninput = (e) => { state.lside = e.target.value; build(); };
 $('#lside-auto').onclick = () => { state.lside = null; if (cut) { $('#lside').value = dominant(); build(); } };

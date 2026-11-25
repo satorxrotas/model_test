@@ -43,7 +43,7 @@ Fourth tab. An image in, a real `.blend` file out, written in the browser and op
 
 - **Object**: product photo → the outline is inflated into a rounded solid (Poisson height field, sqrt profile) with the photo on the front and mirrored on the back; height, thickness, flat/rounded back, optional surface relief from the photo's brightness; Subdivision modifier.
 - **Logo**: graphic → every shape traced (marching squares, holes and islands kept), simplified, triangulated (earcut) and extruded; the front wears the artwork, sides take a colour; real Bevel modifier with auto smooth.
-- **Scene**: any picture → a picture plane or a studio sweep (wall curving onto the floor), shadeless (emission) or lit, render size and camera matched to the image.
+- **Scene** (3D scene, default): any photo is rebuilt as a 3D scene. Depth comes from Depth Anything V2 Small (int8 ONNX, 35 MB, run in the browser with ONNX Runtime Web / WASM, `js/depth.js`). Every pixel is projected through a camera with the photo's lens; sharp steps in depth split the surface into separate objects (each given thickness by pushing a back copy away from the camera along its rays), and the backdrop behind them is filled in (depth and colour) so the camera can move (`js/scene3d.js`). The Blender camera sits at the photo's viewpoint (it reproduces the photo exactly, Standard view transform for shadeless), with an optional 5-second camera-move loop. One photo can't show the backs of things, so small camera moves look best. *Flat picture* and *Sweep* layouts are still there for a plain picture plane or a studio sweep.
 - **Garment**: the Image to Model pipeline (templates, women's/men's body, description) → garment with an armature built from the body's Mixamo skeleton (`mixamorig:*` bones, rest matrices computed Blender-style), vertex-group skin weights, Armature modifier, optional rigged body, and motions (reference sway, walk, idle, run, dance, model poses) baked as Blender actions.
 - Every file gets a camera framed on the model, key/fill/rim area lights (Studio / Soft / Dramatic), a matching floor and world colour, Eevee or Cycles, packed textures, and viewports set to Material Preview.
 
@@ -63,8 +63,10 @@ How it works: `assets/blend/template.blend` is Blender's own factory-startup fil
 - `vendor/meshoptimizer/` – meshoptimizer 1.3.0 simplifier + decoder (MIT)
 - `vendor/three-mesh-bvh/` – three-mesh-bvh 0.9.18 (MIT)
 - `vendor/earcut/` – earcut 3.0.1 (ISC)
+- `vendor/onnxruntime-web/` – ONNX Runtime Web 1.20.1 (MIT)
+- `assets/models/depth-anything-v2-small-q8.onnx` – Depth Anything V2 Small (Apache-2.0; ONNX export by fabio-sim/Depth-Anything-ONNX), inlined and int8-quantised
 - `assets/blend/template.blend` – Blender's factory startup file (Blender 3.5 source, GPL), brushes and palettes removed
-- `blend.html`, `js/img2blend.js`, `js/blendfile.js`, `js/blendscene.js`, `js/blendrig.js`, `js/blendgen.js`, `js/motionlib.js` – Image to Blend
+- `blend.html`, `js/img2blend.js`, `js/blendfile.js`, `js/blendscene.js`, `js/blendrig.js`, `js/blendgen.js`, `js/motionlib.js`, `js/depth.js`, `js/scene3d.js` – Image to Blend
 
 The page sits behind a client-side password gate (`js/gate.js`, stores only a SHA-256 hash). It keeps casual visitors out; the repo itself is public.
 

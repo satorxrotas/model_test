@@ -223,7 +223,7 @@ export class BlendScene {
       if (f.has('BevelModifierData', 'harden_normals')) f.set(b, 'face_str_mode', 0);
     }
     if (m.type === 'subsurf') f.set(b, 'levels', m.levels ?? 1).set(b, 'renderLevels', m.levels ?? 2).set(b, 'quality', 3).set(b, 'flags', 2 /* use creases */).set(b, 'uv_smooth', 1).set(b, 'boundary_smooth', 1);
-    if (m.type === 'solidify') f.set(b, 'offset', -1).set(b, 'offset_fac', -1).set(b, 'crease_inner', 0).set(b, 'flag', 0).set(b, 'mat_ofs', 0).set(b, 'nonmanifold_thickness_mode', 1).set(b, 'nonmanifold_boundary_mode', 0).set(b, 'merge_tolerance', 0.0001).set(b, 'bevel_convex', 0).set(b, 'offset', m.thickness ?? 0.01);
+    if (m.type === 'solidify') { f.set(b, 'offset', m.thickness ?? 0.01).set(b, 'offset_fac', -1).set(b, 'flag', 2 /* fill rim */).set(b, 'mode', 0).set(b, 'merge_tolerance', 0.0001).set(b, 'mat_ofs', 0).set(b, 'mat_ofs_rim', 0); if (f.has('SolidifyModifierData', 'nonmanifold_offset_mode')) f.set(b, 'nonmanifold_offset_mode', 2); }
     return [b];
   }
 

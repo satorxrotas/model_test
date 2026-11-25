@@ -97,6 +97,7 @@
   .modes button:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
   .modes button.on { background: var(--accent); border-color: var(--accent); color: #111; }
   body:not([data-mode=object]) .m-object, body:not([data-mode=logo]) .m-logo, body:not([data-mode=scene]) .m-scene, body:not([data-mode=garment]) .m-garment, body[data-mode=garment] .not-garment, body[data-mode=scene] .not-scene { display: none; }
+  body[data-layout='3d'] .lay-flat, body:not([data-layout='3d']) .lay-3d { display: none; }
   .motions { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
   .motions .check { margin: 0 0 5px; }
   /* password gate */
@@ -198,9 +199,19 @@
         <p class="hint">Traced from the outline (holes kept), extruded, with a real Bevel modifier you can tweak in Blender.</p>
       </div>
       <div class="m-scene">
-        <div class="seg"><button data-layout="flat" class="on">Flat picture</button><button data-layout="sweep">Studio sweep</button></div>
-        <label class="row"><span>Picture height</span><span class="val" id="sheight-v"></span></label><input type="range" id="sheight" min="0.5" max="6" step="0.1">
-        <label class="check"><input type="checkbox" id="sglow" checked><span>Shadeless<small>The picture renders exactly as the photo (emission). Off: lit like a print.</small></span></label>
+        <div class="seg"><button data-layout="3d" class="on">3D scene</button><button data-layout="flat">Flat picture</button><button data-layout="sweep">Sweep</button></div>
+        <div class="lay-3d">
+          <label class="row"><span>Lens (35 mm equiv.)</span><span class="val" id="lens-v"></span></label><input type="range" id="lens" min="14" max="105" step="1">
+          <label class="row"><span>Nearest point</span><span class="val" id="near-v"></span></label><input type="range" id="near" min="0.3" max="20" step="0.1">
+          <label class="row"><span>Depth range</span><span class="val" id="range-v"></span></label><input type="range" id="range" min="1.5" max="40" step="0.5">
+          <label class="row"><span>Object separation</span><span class="val" id="sep-v"></span></label><input type="range" id="sep" min="0.3" max="3" step="0.05">
+          <label class="row"><span>Object thickness</span><span class="val" id="thick-v"></span></label><input type="range" id="thick" min="0" max="1" step="0.05">
+          <label class="row"><span>Mesh detail</span><span class="val" id="detail-v"></span></label><input type="range" id="detail" min="120" max="400" step="10">
+          <label class="check"><input type="checkbox" id="cammove" checked><span>Camera move<small>A slow 5-second loop that shows off the depth (Blender action on the camera)</small></span></label>
+          <p class="hint">Depth comes from Depth Anything V2 running in your browser (35 MB download, once). Things that stand apart in depth become separate objects; the background behind them is filled in so you can move the camera. It's one photo, so the backs of things are guessed — small camera moves look best.</p>
+        </div>
+        <div class="lay-flat"><label class="row"><span>Picture height</span><span class="val" id="sheight-v"></span></label><input type="range" id="sheight" min="0.5" max="6" step="0.1"></div>
+        <label class="check"><input type="checkbox" id="sglow" checked><span>Shadeless<small>Looks exactly like the photo (emission). Off: lit by the scene lights.</small></span></label>
       </div>
       <div class="m-garment">
         <label class="check"><input type="checkbox" id="gbody"><span>Include the body<small>Rigged too. The women's body has its own wide trousers, which can show through tight garments</small></span></label>
