@@ -87,7 +87,7 @@ export function addArmature(S, name, bones) {
 
 /* ---------- actions ---------- */
 // channels: [{ bone, rot: Float32Array(frames*4) wxyz | null, loc: Float32Array(frames*3) | null }]
-export function addAction(S, name, channels, frames, { fakeUser = true } = {}) {
+export function addAction(S, name, channels, frames, { fakeUser = true, cyclic = false } = {}) {
   const f = S.f, ac = f.alloc('bAction', 1, 'AC\0\0');
   f.set(ac, 'id.name', S.unique('AC', name)).set(ac, 'id.us', fakeUser ? 1 : 0).set(ac, 'id.flag', fakeUser ? 512 : 0).set(ac, 'idroot', 0); // set when assigned (an unassigned object action crashes Blender 5.0's upgrade)
   const curves = [], data = [];
@@ -104,6 +104,12 @@ export function addAction(S, name, channels, frames, { fakeUser = true } = {}) {
     }
     f.set(fc, 'bezt', bt).set(fc, 'totvert', frames).set(fc, 'rna_path', rp).set(fc, 'array_index', idx).set(fc, 'flag', 1 | 4).set(fc, 'color_mode', 0);
     curves.push(fc); data.push(fc, bt, rp);
+    if (cyclic) { // Cycles F-modifier: repeat the keys forever, before and after
+      const fm = f.alloc('FModifier'), cy = f.alloc('FMod_Cycles');
+      f.set(cy, 'before_mode', 1).set(cy, 'after_mode', 1).set(cy, 'before_cycles', 0).set(cy, 'after_cycles', 0);
+      f.set(fm, 'name', 'Cycles').set(fm, 'type', 4).set(fm, 'flag', 0).set(fm, 'ui_expand_flag', 1).set(fm, 'influence', 1).set(fm, 'curve', fc).set(fm, 'data', cy);
+      f.linkList(fc, 'modifiers', [fm]); data.push(fm, cy);
+    }
   };
   for (const c of channels) {
     const base = `pose.bones["${c.bone.replace(/"/g, '\\"')}"]`;

@@ -24,7 +24,7 @@ const MODES = {
   scene: { hint: 'Any photo → rebuilt as a 3D scene: depth from an AI model, separate objects, backdrop filled in behind them, camera at the photo\'s viewpoint.', file: 'Any photo — rooms, streets, people, products', empty: 'Any photo' },
   garment: { hint: 'Garment photo or template → rigged garment on the Motion Studio body, with motions as Blender actions.', file: 'Garment flat lay or product shot', empty: 'Garment photo — or pick a template' },
 };
-const MOTION_LIST = [['p_ref', 'Reference sway', true], ['walk', 'Walk', true], ['idle', 'Idle', false], ['run', 'Run', false], ['samba', 'Dance', false], ['p_shift', 'Weight shift', false], ['p_hippop', 'Hip pop', false], ['p_handhip', 'Hand on hip', false], ['p_twist', 'Slow twist', false], ['p_lean', 'Lean back', false]];
+const MOTION_LIST = [['p_ref', 'Reference sway', true], ['walkloop', 'Seamless walk', true], ['walk', 'Walk', false], ['idle', 'Idle', false], ['run', 'Run', false], ['samba', 'Dance', false], ['p_shift', 'Weight shift', false], ['p_hippop', 'Hip pop', false], ['p_handhip', 'Hand on hip', false], ['p_twist', 'Slow twist', false], ['p_lean', 'Lean back', false]];
 const state = {
   mode: 'object', tolerance: 1, name: 'model',
   oheight: 30, othick: 0.35, odetail: 0, back: 'round',
@@ -433,12 +433,13 @@ async function garmentBlend(S, name) {
     for (const clip of clips) {
       const b = bakeClip({ mixer, clip, root: character, skeleton: skel, spec, arm, fps: 30, restPose, applyPose });
       const label = MOTION_LIST.find((m) => m[0] === clip.name)?.[1] || clip.name;
-      const ac = addAction(S, label, b.channels, b.frames);
+      const ac = addAction(S, label, b.channels, b.frames, { cyclic: true }); // every motion is a loop: Cycles modifiers repeat it
       if (!first) { first = ac; firstFrames = b.frames; }
     }
     mixer.uncacheRoot(character);
     applyPose(restPose); character.updateMatrixWorld(true);
-    if (first) { setAction(S, armOb, first); S.setRender({ frames: firstFrames, fps: 30 }); }
+    // the last key repeats the first, so one cycle is frames − 1 long; play whole cycles for at least ~5 s
+    if (first) { const cyc = firstFrames - 1; setAction(S, armOb, first); S.setRender({ frames: cyc * Math.max(1, Math.round(150 / cyc)), fps: 30 }); }
   }
   return box;
 }

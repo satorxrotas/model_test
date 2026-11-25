@@ -10,7 +10,7 @@ import { POSES, bakePoses } from './poses.js';
 import { REF_MOTION } from './refmotion.js';
 import { getGarment } from './handoff.js';
 import { FIGURES, loadFigure, landmarks, morphGeometry } from './bodies.js';
-import { retargetClipFor } from './motionlib.js';
+import { retargetClipFor, makeSeamless } from './motionlib.js';
 
 const $ = (s) => document.querySelector(s);
 const status = (msg) => { $('#status').textContent = msg; };
@@ -27,6 +27,7 @@ const FORMATS = {
 const MOTIONS = [
   ...POSES.map((p) => ({ id: p.id, label: p.label, group: 'Model poses · in place' })),
   { id: 'idle', label: 'Idle', src: 'Xbot', clip: 'idle', group: 'Movement' },
+  { id: 'walkloop', label: 'Seamless walk (1 s loop)', src: 'Xbot', clip: 'walk', group: 'Movement', loop: 1 },
   { id: 'walk', label: 'Walk', src: 'Xbot', clip: 'walk', group: 'Movement' },
   { id: 'run', label: 'Run', src: 'Xbot', clip: 'run', group: 'Movement' },
   { id: 'samba', label: 'Dance', src: 'Michelle', clip: 'SambaDance', group: 'Movement' },
@@ -164,6 +165,7 @@ async function loadRigs(id = state.figure) {
     let baked;
     if (src === own) baked = clip.clone();
     else { const sb = bonesByName(src.scene), rest = snapshotPose(sb); baked = retargetClip(src, clip); applyPose(rest); src.scene.updateMatrixWorld(true); }
+    if (m.loop) baked = makeSeamless(baked, m.loop);
     baked.name = m.id;
     actions[m.id] = mixer.clipAction(baked);
   }

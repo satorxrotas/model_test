@@ -5,6 +5,7 @@ import { POSES, bakePoses } from './poses.js';
 
 export const MOVES = [
   { id: 'idle', label: 'Idle', src: 'men', clip: 'idle' },
+  { id: 'walkloop', label: 'Seamless walk', src: 'men', clip: 'walk', loop: 1 },
   { id: 'walk', label: 'Walk', src: 'men', clip: 'walk' },
   { id: 'run', label: 'Run', src: 'men', clip: 'run' },
   { id: 'samba', label: 'Dance', src: 'women', clip: 'SambaDance' },
@@ -60,6 +61,25 @@ export function retargetClipFor({ src, clip, character, bones, span, fps = 30 })
 }
 
 
+// Re-time a cyclic clip to exactly `period` seconds on whole frames, with its last frame identical to its first
+// and any drift spread over the cycle, so it repeats with no hitch (and whole-second videos end where they start).
+export function makeSeamless(clip, period = 1, fps = 30) {
+  const N = Math.max(2, Math.round(period * fps)), dur = clip.duration;
+  const times = Float32Array.from({ length: N + 1 }, (_, k) => k / fps);
+  const tracks = clip.tracks.map((tr) => {
+    const n = tr.getValueSize(), it = tr.createInterpolant(), vals = new Float32Array((N + 1) * n);
+    const start = Float32Array.from(it.evaluate(0)), end = Float32Array.from(it.evaluate(dur));
+    const quat = tr instanceof THREE.QuaternionKeyframeTrack;
+    for (let k = 0; k < N; k++) {
+      const v = it.evaluate((k / N) * dur);
+      for (let j = 0; j < n; j++) vals[k * n + j] = quat ? v[j] : v[j] - (end[j] - start[j]) * (k / N);
+    }
+    vals.set(vals.subarray(0, n), N * n); // close the loop exactly
+    return new tr.constructor(tr.name, times, vals);
+  });
+  return new THREE.AnimationClip(clip.name, N / fps, tracks);
+}
+
 // Build the requested motions for a character: figs = { women, men } from loadFigure, own = the character's figure id.
 // Returns AnimationClips named by motion id (model poses are p_* ids from poses.js).
 export function buildMotions({ figs, own, character, bones, span, ids }) {
@@ -71,6 +91,7 @@ export function buildMotions({ figs, own, character, bones, span, ids }) {
     let baked;
     if (m.src === own) baked = clip.clone();
     else { const sb = bonesByName(src.scene), rest = snapshotPose(sb); baked = retargetClipFor({ src, clip, character, bones, span }); applyPose(rest); src.scene.updateMatrixWorld(true); }
+    if (m.loop) baked = makeSeamless(baked, m.loop);
     baked.name = m.id; byId[m.id] = baked;
   }
   if (byId.idle && [...need].some((i) => i.startsWith('p_'))) for (const c of bakePoses({ character, bones, base: byId.idle, span })) byId[c.name] = c;
